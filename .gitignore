@@ -30,6 +30,9 @@ venv/
 .DS_Store
 Thumbs.db
 
+# Local git worktrees
+/.worktrees/
+
 # Patch artifacts
 *.orig
 *.rej
