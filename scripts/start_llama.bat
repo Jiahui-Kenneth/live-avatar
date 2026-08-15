@@ -41,4 +41,5 @@ start "llama-server" llama-server.exe ^
   --ctx-size %LLM_CTX_SIZE% ^
   --parallel 1 ^
   --reasoning off ^
+  --jinja ^
   --alias "%LLM_ALIAS%"
