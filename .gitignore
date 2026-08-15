@@ -33,6 +33,13 @@ Thumbs.db
 # Local git worktrees
 /.worktrees/
 
+# Local runtime payloads
+/downloads/
+/runtime/
+/deps/
+/models/
+/logs/
+
 # Patch artifacts
 *.orig
 *.rej
