@@ -7,10 +7,11 @@
 ## 已确认约束
 
 - 工作目录：`E:\AI\AI-Girlfriend2`。
-- GPU：NVIDIA GeForce RTX 5090，32 GB 显存，驱动 610.62。
+- GPU：NVIDIA GeForce RTX 5090，32 GB 显存，驱动 610.62；系统物理内存约 96 GB。
 - 保留现有 Python 3.13 和 3.14；另行安装文章推荐的 Python 3.11.9，所有项目虚拟环境显式使用 `py -3.11`。
 - 唯一版本例外：PyTorch 固定为 2.11.0 的 CUDA 12.8 Windows wheel（`torch==2.11.0`、`torchvision==0.26.0`、`torchaudio==2.11.0`），以支持 Blackwell `sm_120`，不使用原文的 CUDA 12.1 wheel。
-- 其余内容遵循原文：`speech-to-speech` 固定提交 `656099a`、Qwen3.5-9B Q4 GGUF、llama.cpp CUDA 版、LiveTalking、Wav2Lip 256 权重和头像资源、仓库提供的两份集成补丁。
+- LLM 使用用户确认的 `Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf`，替换原文示例的 9B 模型；该 Q4_K_M 权重约 21.2 GB。
+- 其余内容遵循原文：`speech-to-speech` 固定提交 `656099a`、llama.cpp CUDA 版、LiveTalking、Wav2Lip 256 权重和头像资源、仓库提供的两份集成补丁。
 - 所有网络服务仅监听 `127.0.0.1`。
 - 不擅自更换模型、上游提交、TTS/STT 后端或业务参数。出现不兼容时保留日志并停在故障点。
 
@@ -24,7 +25,7 @@ E:\AI\AI-Girlfriend2\
 │   ├── speech-to-speech\                  固定到 656099a
 │   └── LiveTalking\                       LiveTalking 上游仓库
 ├── models\
-│   └── Qwen3.5-9B-...-Q4_K_M.gguf         本地 LLM 权重
+│   └── Qwen3.5-35B-A3B-...-Q4_K_M.gguf     本地 LLM 权重
 └── downloads\                             可复用的安装包和压缩包
 ```
 
@@ -38,12 +39,15 @@ E:\AI\AI-Girlfriend2\
 
 ### llama.cpp 与 LLM
 
-下载 2026-08-15 核对到的 llama.cpp `b10437` Windows CUDA 12.4 x64 主包及配套 CUDA DLL 包，将文件合并解压到 `deps\llama.cpp`。文章没有固定 llama.cpp 提交，使用安装当天的官方发布版。下载原文指定的 `Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf` 至 `models`。启动参数保持：
+下载 2026-08-15 核对到的 llama.cpp `b10437` Windows CUDA 12.4 x64 主包及配套 CUDA DLL 包，将文件合并解压到 `deps\llama.cpp`。文章没有固定 llama.cpp 提交，使用安装当天的官方发布版。下载用户确认的 `Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf` 至 `models`。启动参数保持文章的 8K 上下文和关闭思考模式，并按 35B 模型卡要求启用 Jinja 模板：
 
 ```text
 --host 127.0.0.1 --port 8080 --n-gpu-layers 999
---ctx-size 8192 --parallel 1 --reasoning off --alias qwen3.5-9b
+--ctx-size 8192 --parallel 1 --reasoning off --jinja
+--alias qwen3.5-35b-a3b
 ```
+
+本轮仅使用文本对话，因此不下载约 858 MB 的视觉 `mmproj` 文件。首选将全部模型层卸载到 GPU；若四服务并行时显存不足，则保留日志并停止，不自动切换 IQ4_XS、CPU 卸载或更小模型。
 
 ### speech-to-speech
 
@@ -89,6 +93,7 @@ TTS 音频只由 LiveTalking 的 WebRTC 音轨在浏览器播放，避免 s2s �
 - 下载失败可重试官方源或文档明确给出的镜像，但不更换模型或项目版本。
 - 补丁先用 `git apply --check` 验证；若失败，记录具体冲突并停止，不直接改上游实现。
 - 若安装依赖后 PyTorch 不再是 CUDA 12.8 构建，则重新安装指定 wheel 并复测 CUDA，不默认为 CPU 回退。
+- 若 35B Q4_K_M 与其他三个 GPU 服务并行时发生 CUDA out-of-memory，则记录各进程显存占用并停止，不自动改变量化、上下文或 GPU 层数。
 - 若资源网站要求登录、验证码或网盘人工操作，暂停并请用户完成该步骤。
 - 不结束不相关进程；端口被占用时先报告 PID 和进程信息。
 - 服务日志保存在各组件目录，验证失败时保留日志用于定位。
@@ -105,7 +110,7 @@ TTS 音频只由 LiveTalking 的 WebRTC 音轨在浏览器播放，避免 s2s �
 ### 独立服务检查
 
 - `http://127.0.0.1:8080/health` 返回 `{"status":"ok"}`。
-- llama.cpp 聊天接口能生成非空中文内容，且没有因 reasoning 字段导致正文为空。
+- llama.cpp 使用模型别名 `qwen3.5-35b-a3b`；聊天接口能生成非空中文内容，且没有因 reasoning 字段导致正文为空。
 - LiveTalking `http://127.0.0.1:8010/embed.html` 能建立数字人会话。
 - s2s 后端监听 8765，网页 UI 监听 7860。
 
