@@ -38,7 +38,7 @@ E:\AI\AI-Girlfriend2\
 
 ### llama.cpp 与 LLM
 
-下载当前 llama.cpp 发布版本的 Windows CUDA 12.2 x64 包，将可执行文件放入 `deps\llama.cpp`。下载原文指定的 `Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf` 至 `models`。启动参数保持：
+下载 2026-08-15 核对到的 llama.cpp `b10437` Windows CUDA 12.4 x64 主包及配套 CUDA DLL 包，将文件合并解压到 `deps\llama.cpp`。文章没有固定 llama.cpp 提交，使用安装当天的官方发布版。下载原文指定的 `Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf` 至 `models`。启动参数保持：
 
 ```text
 --host 127.0.0.1 --port 8080 --n-gpu-layers 999
