@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Install and verify the article's four-service Live Avatar stack on this Windows workstation, with PyTorch 2.11.0 CUDA 12.8 as the sole compatibility substitution for the RTX 5090.
+**Goal:** Install and verify the article's four-service Live Avatar stack on this Windows workstation, replacing the article's 9B example with the approved Qwen3.5-35B-A3B Q4_K_M model and using PyTorch 2.11.0 CUDA 12.8 for the RTX 5090.
 
 **Architecture:** Keep the integration repository at `E:\AI\AI-Girlfriend2` and place all upstream runtimes under ignored local directories. Each Python service receives its own Python 3.11 virtual environment; llama.cpp, s2s, the demo, and LiveTalking bind only to loopback and are verified independently before the end-to-end microphone test.
 
-**Tech Stack:** Windows 11, Python 3.11.9, PyTorch 2.11.0 + CUDA 12.8, llama.cpp Windows CUDA, Qwen3.5-9B Q4_K_M GGUF, Hugging Face speech-to-speech at `656099a`, faster-whisper, Qwen3-TTS, LiveTalking, Wav2Lip, WebRTC.
+**Tech Stack:** Windows 11, Python 3.11.9, PyTorch 2.11.0 + CUDA 12.8, llama.cpp Windows CUDA, Qwen3.5-35B-A3B Q4_K_M GGUF, Hugging Face speech-to-speech at `656099a`, faster-whisper, Qwen3-TTS, LiveTalking, Wav2Lip, WebRTC.
 
 ## Global Constraints
 
@@ -14,9 +14,12 @@
 - Preserve the installed Python 3.13 and 3.14 interpreters; all new environments must use `py -3.11`.
 - Install `torch==2.11.0`, `torchvision==0.26.0`, and `torchaudio==2.11.0` from `https://download.pytorch.org/whl/cu128` in both virtual environments.
 - Keep `speech-to-speech` at commit `656099a`.
-- Use `Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf` and keep `--reasoning off`, `--ctx-size 8192`, and `--parallel 1`.
+- Use `Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf` (about 21.2GB) and keep `--reasoning off`, `--ctx-size 8192`, `--parallel 1`, and `--n-gpu-layers 999`.
+- Add `--jinja` for the 35B model's chat template and use alias `qwen3.5-35b-a3b`.
+- Do not download the vision `mmproj` file; the application uses text-only LLM requests.
 - Keep faster-whisper language `zh` and use the repository's two integration patches unchanged.
 - Bind ports 8080, 8765, 7860, and 8010 only to `127.0.0.1`.
+- Require at least 80GB of free space on E before downloading the 35B model and runtime dependencies.
 - Do not silently substitute a model, commit, speech backend, avatar backend, port, or CPU fallback.
 - Stop and report if a patch check fails, a required asset needs interactive login/CAPTCHA, or CUDA reports a capability other than `(12, 0)`.
 
@@ -25,6 +28,7 @@
 ## File and Directory Responsibilities
 
 - Modify: `.gitignore` — excludes machine-local runtimes, downloads, models, and nested upstream repositories.
+- Modify: `scripts/start_llama.bat` — enables the Jinja chat template required by the 35B model.
 - Create: `scripts/config.local.bat` — ignored machine-local mapping used by the existing launch scripts.
 - Create: `downloads/` — official installer and archive cache.
 - Create: `runtime/Python311/` — Python 3.11.9 per-user installation.
@@ -59,7 +63,7 @@ py -0p
 Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object LocalPort -In 8080,8765,7860,8010
 ```
 
-Expected: RTX 5090 with about 32GB VRAM; more than 60GB free; no required port owned by an unrelated listener.
+Expected: RTX 5090 with about 32GB VRAM; more than 80GB free; no required port owned by an unrelated listener.
 
 - [ ] **Step 2: Exclude local installation payloads from Git**
 
@@ -130,17 +134,17 @@ git commit -m "chore: ignore local avatar runtimes"
 
 Expected: one commit containing only `.gitignore`.
 
-## Task 2: Install and Verify llama.cpp with Qwen3.5-9B
+## Task 2: Install and Verify llama.cpp with Qwen3.5-35B-A3B
 
 **Files:**
 - Create: `deps/llama.cpp/`
-- Create: `models/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf`
+- Create: `models/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf`
 - Create: `logs/llama.stdout.log`
 - Create: `logs/llama.stderr.log`
 
 **Interfaces:**
-- Consumes: official llama.cpp GitHub release assets and the exact Hugging Face Q4_K_M file.
-- Produces: OpenAI-compatible LLM endpoint `http://127.0.0.1:8080/v1` and health endpoint `http://127.0.0.1:8080/health`.
+- Consumes: official llama.cpp GitHub release assets and the exact 35B-A3B Hugging Face Q4_K_M file.
+- Produces: OpenAI-compatible LLM endpoint `http://127.0.0.1:8080/v1` using model alias `qwen3.5-35b-a3b`, plus health endpoint `http://127.0.0.1:8080/health`.
 
 - [ ] **Step 1: Record the locked official llama.cpp release assets**
 
@@ -184,13 +188,13 @@ Expected: `llama-server.exe` and the CUDA 12 runtime DLL exist at the configured
 Run:
 
 ```powershell
-$modelUrl = 'https://huggingface.co/HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive/resolve/main/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf?download=true'
-$modelPath = 'E:\AI\AI-Girlfriend2\models\Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf'
+$modelUrl = 'https://huggingface.co/HauhauCS/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive/resolve/main/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf?download=true'
+$modelPath = 'E:\AI\AI-Girlfriend2\models\Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf'
 curl.exe -L --fail --retry 5 --retry-delay 5 -C - -o $modelPath $modelUrl
 Get-Item $modelPath | Select-Object FullName,Length
 ```
 
-Expected: file exists and is approximately 5.63GB.
+Expected: file exists and is approximately 21.2GB. No `mmproj` file is downloaded.
 
 - [ ] **Step 4: Start llama-server for isolated verification**
 
@@ -198,8 +202,8 @@ Run:
 
 ```powershell
 $llama = 'E:\AI\AI-Girlfriend2\deps\llama.cpp\llama-server.exe'
-$model = 'E:\AI\AI-Girlfriend2\models\Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf'
-$args = @('-m',$model,'--host','127.0.0.1','--port','8080','--n-gpu-layers','999','--ctx-size','8192','--parallel','1','--reasoning','off','--alias','qwen3.5-9b')
+$model = 'E:\AI\AI-Girlfriend2\models\Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf'
+$args = @('-m',$model,'--host','127.0.0.1','--port','8080','--n-gpu-layers','999','--ctx-size','8192','--parallel','1','--reasoning','off','--jinja','--alias','qwen3.5-35b-a3b')
 $llamaProcess = Start-Process $llama -ArgumentList $args -RedirectStandardOutput 'E:\AI\AI-Girlfriend2\logs\llama.stdout.log' -RedirectStandardError 'E:\AI\AI-Girlfriend2\logs\llama.stderr.log' -PassThru -WindowStyle Hidden
 ```
 
@@ -211,12 +215,13 @@ Run after health becomes ready:
 
 ```powershell
 Invoke-RestMethod 'http://127.0.0.1:8080/health'
-$body = @{ model='qwen3.5-9b'; messages=@(@{role='user';content='请只回答：你好'}); max_tokens=32 } | ConvertTo-Json -Depth 5
+$body = @{ model='qwen3.5-35b-a3b'; messages=@(@{role='user';content='请只回答：你好'}); max_tokens=32 } | ConvertTo-Json -Depth 5
 $reply = Invoke-RestMethod 'http://127.0.0.1:8080/v1/chat/completions' -Method Post -ContentType 'application/json' -Body $body
 $reply.choices[0].message.content
+nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
 ```
 
-Expected: health status is `ok`; content is non-empty Chinese text rather than an empty reasoning-only field.
+Expected: health status is `ok`; content is non-empty Chinese text rather than an empty reasoning-only field; the 35B llama process fits on the RTX 5090 without CUDA out-of-memory.
 
 - [ ] **Step 6: Stop only the isolated test process**
 
@@ -417,7 +422,7 @@ Expected: `listenhost` and `humanpcm` are both found.
 
 **Files:**
 - Create: `scripts/config.local.bat`
-- Inspect: `scripts/start_llama.bat`
+- Modify: `scripts/start_llama.bat`
 - Inspect: `scripts/start_s2s.bat`
 - Inspect: `scripts/start_livetalking.bat`
 - Inspect: `scripts/start_demo.bat`
@@ -426,7 +431,44 @@ Expected: `listenhost` and `humanpcm` are both found.
 - Consumes: all installed component directories and the exact model file.
 - Produces: one machine-local configuration consumed by `scripts/start_all.bat`.
 
-- [ ] **Step 1: Create the exact local configuration**
+- [ ] **Step 1: Verify the current llama launcher lacks the required Jinja flag**
+
+Run:
+
+```powershell
+$match = Select-String -Path 'scripts\start_llama.bat' -SimpleMatch -Pattern '--jinja'
+if ($match) { throw 'Precondition changed: --jinja already exists' }
+```
+
+Expected: command exits 0 because the current launcher does not yet include `--jinja`.
+
+- [ ] **Step 2: Add the required Jinja flag to the llama launcher**
+
+Modify the argument block in `scripts/start_llama.bat` to contain:
+
+```bat
+  --parallel 1 ^
+  --reasoning off ^
+  --jinja ^
+  --alias "%LLM_ALIAS%"
+```
+
+Expected: no other llama-server arguments or launcher behavior changes.
+
+- [ ] **Step 3: Verify and commit the launcher change**
+
+Run:
+
+```powershell
+Select-String -Path 'scripts\start_llama.bat' -SimpleMatch -Pattern '--jinja'
+git diff --check
+git add scripts/start_llama.bat
+git commit -m "fix: enable jinja for qwen 35b"
+```
+
+Expected: one `--jinja` match and one commit containing only `scripts/start_llama.bat`.
+
+- [ ] **Step 4: Create the exact local configuration**
 
 Create `scripts/config.local.bat` with:
 
@@ -435,11 +477,11 @@ Create `scripts/config.local.bat` with:
 set "S2S_DIR=E:\AI\AI-Girlfriend2\deps\speech-to-speech"
 set "LIVETALKING_DIR=E:\AI\AI-Girlfriend2\deps\LiveTalking"
 set "LLAMA_CPP_DIR=E:\AI\AI-Girlfriend2\deps\llama.cpp"
-set "LLM_MODEL_GGUF=E:\AI\AI-Girlfriend2\models\Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"
+set "LLM_MODEL_GGUF=E:\AI\AI-Girlfriend2\models\Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"
 set "LLM_CTX_SIZE=8192"
-set "LLM_ALIAS=qwen3.5-9b"
+set "LLM_ALIAS=qwen3.5-35b-a3b"
 set "LLM_URL=http://127.0.0.1:8080/v1"
-set "LLM_MODEL_NAME=qwen3.5-9b"
+set "LLM_MODEL_NAME=qwen3.5-35b-a3b"
 set "STT_LANG=zh"
 set "DEMO_PORT=7860"
 set "LT_PORT=8010"
@@ -447,16 +489,16 @@ set "LT_MODEL=wav2lip"
 set "LT_AVATAR=myavatar"
 ```
 
-Expected: file is ignored by Git and contains no external secrets.
+Expected: file is ignored by Git, contains no external secrets, and maps both aliases to `qwen3.5-35b-a3b`.
 
-- [ ] **Step 2: Validate every configured path and critical flag**
+- [ ] **Step 5: Validate every configured path and critical flag**
 
 Run:
 
 ```powershell
 $required = @(
   'E:\AI\AI-Girlfriend2\deps\llama.cpp\llama-server.exe',
-  'E:\AI\AI-Girlfriend2\models\Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf',
+  'E:\AI\AI-Girlfriend2\models\Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf',
   'E:\AI\AI-Girlfriend2\deps\speech-to-speech\.venv\Scripts\python.exe',
   'E:\AI\AI-Girlfriend2\deps\LiveTalking\.venv\Scripts\python.exe',
   'E:\AI\AI-Girlfriend2\deps\LiveTalking\models\wav2lip.pth',
@@ -465,7 +507,7 @@ $required = @(
 )
 $missing = $required | Where-Object { -not (Test-Path -LiteralPath $_) }
 if ($missing) { throw "Missing paths: $($missing -join ', ')" }
-Select-String -Path 'scripts\start_llama.bat' -Pattern '--reasoning off','--ctx-size','--parallel 1'
+Select-String -Path 'scripts\start_llama.bat' -Pattern '--reasoning off','--ctx-size','--parallel 1','--jinja'
 Select-String -Path 'scripts\start_s2s.bat' -Pattern 'faster_whisper_stt_gen_language','STT_LANG=zh','qwen3_tts_device cuda'
 Select-String -Path 'scripts\start_livetalking.bat' -Pattern '--listenhost 127.0.0.1'
 git check-ignore 'scripts/config.local.bat'

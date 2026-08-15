@@ -8,6 +8,7 @@
 
 - 工作目录：`E:\AI\AI-Girlfriend2`。
 - GPU：NVIDIA GeForce RTX 5090，32 GB 显存，驱动 610.62；系统物理内存约 96 GB。
+- E 盘可用空间约 1.5 TB；35B 部署开始前至少保留 80 GB 可用空间。
 - 保留现有 Python 3.13 和 3.14；另行安装文章推荐的 Python 3.11.9，所有项目虚拟环境显式使用 `py -3.11`。
 - 唯一版本例外：PyTorch 固定为 2.11.0 的 CUDA 12.8 Windows wheel（`torch==2.11.0`、`torchvision==0.26.0`、`torchaudio==2.11.0`），以支持 Blackwell `sm_120`，不使用原文的 CUDA 12.1 wheel。
 - LLM 使用用户确认的 `Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf`，替换原文示例的 9B 模型；该 Q4_K_M 权重约 21.2 GB。
