@@ -25,8 +25,8 @@ if not exist "%S2S_DIR%\.venv\Scripts\python.exe" (
   exit /b 1
 )
 
-set LIVETALKING_URL=%LIVETALKING_URL: =%
-if "%LIVETALKING_URL%"=="" set LIVETALKING_URL=http://127.0.0.1:8010
+if defined LIVETALKING_URL set "LIVETALKING_URL=%LIVETALKING_URL: =%"
+if not defined LIVETALKING_URL set "LIVETALKING_URL=http://127.0.0.1:8010"
 set LLM_URL=%LLM_URL: =%
 if "%LLM_URL%"=="" set LLM_URL=http://127.0.0.1:8080/v1
 set LLM_MODEL_NAME=%LLM_MODEL_NAME: =%
