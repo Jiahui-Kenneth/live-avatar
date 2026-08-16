@@ -218,6 +218,7 @@ set "LLM_MODEL_GGUF=C:\llama.cpp\models\Qwen3.5-9B-Uncensored-HauhauCS-Aggressiv
 | `STT_LANG` | `zh` | STT 语言（改 `en` 则识别英文） |
 | `DEMO_PORT` | `7860` | 网页端口 |
 | `LT_PORT` | `8010` | 数字人端口 |
+| `LIVE_AVATAR_DATA_DIR` | `<仓库>\data` | 自定义头像、当前选择和安全令牌的持久化目录 |
 
 > **⚠️ STT 语言注意**：s2s 的 faster-whisper 默认按英文识别。必须传 `--faster_whisper_stt_gen_language zh`，否则你说中文会被强行按英文转写（输出变成英文句子），LLM 也会回复英文。`start_s2s.bat` 已默认带上 `STT_LANG=zh`。若想中英文都支持，把 `STT_LANG` 改为 `auto`。
 
@@ -267,6 +268,18 @@ curl http://127.0.0.1:8010/api/admin/sessions
 rem 查看 s2s 转发日志是否指向同一个 sessionid：
 findstr "humanpcm" C:\s2s\s2s_err.log
 ```
+
+### 6.5 上传和切换静态图片头像
+
+1. 打开 <http://127.0.0.1:7860>，进入右上角“设置”。
+2. 在“数字人头像”区域选择一张 JPEG、PNG 或 WebP 图片，文件最大 10 MiB。
+3. 拖动图片并使用缩放滑块，使裁剪框中只保留一个清晰、正面的脸。裁剪输出固定为 576×768（3:4）。
+4. 填写名称，点击“生成并切换”。界面会依次显示提交、人脸检查、Wav2Lip 生成和 WebRTC 切换进度。
+5. 已生成头像会保留在列表中，可以随时切换。当前使用中的头像、内置头像不能删除。
+
+自定义头像默认保存在 `<仓库>\data\avatars`；当前选择保存在 `<仓库>\data\config\active-avatar.json`。设置 `LIVE_AVATAR_DATA_DIR` 可以把这两部分放到独立数据盘，升级或重新克隆上游项目时不会丢失。服务器只保存裁剪后的生成资源和 SHA-256 摘要，任务结束后会删除临时上传文件与中间视频。
+
+头像管理接口只监听本机，并由启动脚本生成的管理员令牌保护。网页只会拿到有效期 5 分钟、绑定页面来源的短期能力值，不会拿到管理员令牌或数据目录。不要把 8010、7860 端口直接暴露到公网。
 
 ---
 
@@ -335,6 +348,17 @@ findstr "humanpcm" C:\s2s\s2s_err.log
 
 本集成使用的 v2 Wav2Lip 权重不能直接接收默认的 96×96 avatar 人脸裁剪；推理输入必须在 `wav2lip_avatar.py` 中 resize 到 **256×256**。256 是该 v2 网络 encoder/decoder skip connection 都匹配的尺寸；不要改用 384，也不要切换到仓库内不匹配的 v1 架构。
 
+### 7.12 图片头像生成失败或效果不自然
+
+- 只使用单人、正脸、五官无遮挡、光线均匀的图片；多人、侧脸或脸部太小会被拒绝。
+- 生成接口需要 576×768 输入。网页裁剪器会自动输出该尺寸，不要绕过设置页直接提交任意分辨率图片。
+- 静态图片只能驱动嘴部区域，头发、肩膀和姿势不会自然摆动；想要更自然的整体动作，应改用嘴巴闭合、头部运动轻微的短视频制作头像。
+- 生成时会占用 GPU，通常需要几十秒；不要重复点击。完成前原有头像和语音会话保持可用。
+
+### 7.13 轮换头像管理令牌
+
+令牌位于 `%LIVE_AVATAR_DATA_DIR%\config\avatar-admin-token.txt`，不要复制到日志、截图或版本库。轮换步骤：先关闭 demo 和 LiveTalking，删除这个令牌文件，再重新运行 `start_all.bat`；启动脚本会原子生成新令牌。轮换会让旧网页中的短期能力立即失效，需要刷新页面并重新建立数字人会话。
+
 ---
 
 ## 8. 自研组件详解
@@ -350,6 +374,14 @@ findstr "humanpcm" C:\s2s\s2s_err.log
 | `patches/s2s-integration.patch` | s2s 集成改动（转发桥、网页集成、中文优化） |
 | `patches/livetalking-integration.patch` | LiveTalking 改动（`/humanpcm` 接口、监听加固） |
 | `web/embed.html` | 数字人全屏背景嵌入页 |
+| `scripts/ensure_avatar_security.ps1` | 原子创建共享头像管理令牌 |
+
+### 图片头像管理安全边界
+
+- LiveTalking 提供创建任务、查询进度、列出、激活、删除和关闭指定 WebRTC 会话的本机接口。
+- demo 使用管理员令牌签发短期 HMAC 能力，能力绑定精确页面 Origin，最长有效 300 秒；配置响应不包含管理员令牌或数据路径。
+- 上传前后分别校验格式、大小、分辨率、单脸数量和最小脸部尺寸；头像 ID 仅允许受限字符，所有路径都限制在共享数据目录内。
+- 生成目录先在临时区完成，校验必需资源后再原子提交。内置头像、当前头像和正在使用的头像拒绝删除。
 
 ### 转发桥原理
 
