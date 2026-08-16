@@ -20,6 +20,7 @@
                                "qwen-tts==0.1.1",
                                "rich==15.0.0",
                                "scipy==1.17.1",
+                               "setuptools==81.0.0",
                                "sounddevice==0.5.5",
                                "soundfile==0.14.0",
                                "torch==2.11.0+cu128",
@@ -27,7 +28,8 @@
                                "torchvision==0.26.0+cu128",
                                "transformers==4.57.3",
                                "uvicorn==0.52.3",
-                               "websockets==17.0.1"
+                               "websockets==17.0.1",
+                               "wheel==0.48.0"
                            ],
                    "livetalking":  [
                                        "accelerate==1.14.0",
@@ -780,6 +782,11 @@
                        "filename":  "werkzeug-3.1.8-py3-none-any.whl",
                        "bytes":  226459,
                        "sha256":  "63a77fb8892bf28ebc3178683445222aa500e48ebad5ec77b0ad80f8726b1f50"
+                   },
+                   {
+                       "filename":  "wheel-0.48.0-py3-none-any.whl",
+                       "bytes":  33320,
+                       "sha256":  "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab"
                    },
                    {
                        "filename":  "yarl-1.24.5-cp311-cp311-win_amd64.whl",
