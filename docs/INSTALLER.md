@@ -89,7 +89,7 @@ Windows“已安装的应用”中卸载 Live Avatar。模型、自定义头像�
 
 | 文件 | 字节 | SHA-256 |
 |---|---:|---|
-| `LiveAvatar-Setup-0.1.0.exe` | 2,129,999 | `acf109ab65892a30636a03d65fa2f734cc2ea17f95be232e13114a0eabb846e0` |
+| `LiveAvatar-Setup-0.1.0.exe` | 2,130,008 | `2fe210bac9ea45609c5feb3a1f3b6b1d145ecf54bb6dc7145213402f10214677` |
 | `python-wheelhouse-live-avatar-v0.1.0.zip` | 457,470,408 | `73ee9e604aac6247e378687676fc2f8b2b44427a6c6dbc7b2c4599e1e0133c0c` |
 
 源码包、完整 release manifest 以及剩余发布文件的字节数和 SHA-256 以 `installer/manifests/components-v0.1.0.json` 为准。正式上传 GitHub Release 后，应再次核对下载文件与本表。

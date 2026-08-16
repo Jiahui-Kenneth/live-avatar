@@ -401,7 +401,7 @@ The wheelhouse builder uses Python 3.11.9 and `pip download --only-binary=:all:`
 `New-ReleaseManifest.ps1` hashes the three bundles and renders URLs under:
 
 ```text
-https://github.com/HeiXia2077/live-avatar/releases/download/v0.1.0/<artifact-name>
+https://github.com/Jiahui-Kenneth/live-avatar/releases/download/v0.1.0/<artifact-name>
 ```
 
 - [ ] **Step 4: Build and verify artifacts**

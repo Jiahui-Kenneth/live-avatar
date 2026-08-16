@@ -1,7 +1,7 @@
 #define MyAppName "Live Avatar"
 #define MyAppVersion "0.1.0"
 #define MyAppPublisher "HeiXia2077"
-#define MyAppURL "https://github.com/HeiXia2077/live-avatar"
+#define MyAppURL "https://github.com/Jiahui-Kenneth/live-avatar"
 
 [Setup]
 AppId={{5F864A9B-2C6F-4B96-8B0D-A56B6358A7A1}

@@ -4,7 +4,7 @@ param(
     [string]$OutputPath = (Join-Path $PSScriptRoot '..\manifests\components-v0.1.0.json'),
     [string]$WheelLockPath = (Join-Path $PSScriptRoot '..\manifests\python-requirements.lock.json'),
     [string]$Version = '0.1.0',
-    [string]$ReleaseBaseUrl = 'https://github.com/HeiXia2077/live-avatar/releases/download/v0.1.0'
+    [string]$ReleaseBaseUrl = 'https://github.com/Jiahui-Kenneth/live-avatar/releases/download/v0.1.0'
 )
 
 $ErrorActionPreference = 'Stop'

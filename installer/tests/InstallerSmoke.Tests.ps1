@@ -14,6 +14,7 @@ if (Test-Path -LiteralPath $issPath -PathType Leaf) {
     $iss = Get-Content -LiteralPath $issPath -Raw -Encoding UTF8
     Assert-True ($iss -match '(?im)^PrivilegesRequired=lowest$') 'setup is per-user without elevation'
     Assert-True ($iss -match '(?im)^ArchitecturesAllowed=x64compatible$') 'setup is restricted to x64-compatible Windows'
+    Assert-True ($iss -match 'https://github\.com/Jiahui-Kenneth/live-avatar') 'setup metadata points to the publishing fork'
     Assert-Equal 3 @([regex]::Matches($iss,'(?im)^Name: "\{userprograms\}\\Live Avatar\\')).Count 'setup creates three user shortcuts'
     Assert-True ($iss -match '-InstallRoot.+-DataRoot') 'setup passes selected program and data roots to bootstrap'
     Assert-True ($iss -match 'DeleteModels\.Checked := False') 'model deletion is opt-in'

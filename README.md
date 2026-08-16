@@ -2,11 +2,11 @@
 
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
-  <a href="https://github.com/HeiXia2077/live-avatar"><img src="https://img.shields.io/badge/platform-Windows-2ea44f.svg" alt="Platform"></a>
+  <a href="https://github.com/Jiahui-Kenneth/live-avatar"><img src="https://img.shields.io/badge/platform-Windows-2ea44f.svg" alt="Platform"></a>
   <img src="https://img.shields.io/badge/Python-3.11-3776AB.svg?logo=python&logoColor=white" alt="Python 3.11">
   <img src="https://img.shields.io/badge/GPU-NVIDIA%20CUDA-76B900.svg?logo=nvidia&logoColor=white" alt="NVIDIA CUDA">
-  <img src="https://img.shields.io/github/stars/HeiXia2077/live-avatar" alt="GitHub stars">
-  <img src="https://img.shields.io/github/v/release/HeiXia2077/live-avatar?label=release" alt="Release">
+  <img src="https://img.shields.io/github/stars/Jiahui-Kenneth/live-avatar" alt="GitHub stars">
+  <img src="https://img.shields.io/github/v/release/Jiahui-Kenneth/live-avatar?label=release" alt="Release">
 </p>
 
 一个完全本地运行的**中文语音对话数字人**。你对着麦克风说话，本地大模型用中文回答，声音被实时合成，同时驱动一个 3D 数字人做**口型同步**，数字人画面铺满整个网页作为背景 —— 就像在和一个真人视频通话。

@@ -53,6 +53,7 @@ Assert-Equal 'torch-cu128-wheel' $manifest.components[3].id 'torch wheel is a se
 Assert-Equal 'torchaudio-cu128-wheel' $manifest.components[4].id 'torchaudio wheel is a separately downloaded component'
 Assert-Equal 'torchvision-cu128-wheel' $manifest.components[5].id 'torchvision wheel is a separately downloaded component'
 Assert-Equal 'python-wheelhouse' $manifest.components[6].id 'release artifact order is preserved'
+Assert-True ($manifest.components[6].urls[0] -match '^https://github\.com/Jiahui-Kenneth/live-avatar/releases/download/v0\.1\.0/') 'release payload uses the publishing fork'
 Assert-Equal 'python_wheel' $manifest.components[3].install_kind 'external torch component uses the python wheel install kind'
 Assert-Equal '2.11.0+cu128' $manifest.components[3].version 'external wheel keeps the locked package version'
 Assert-True ($manifest.components[3].urls[0] -match '^https://download\.pytorch\.org/whl/cu128/torch-2\.11\.0%2Bcu128-') 'torch wheel uses the official PyTorch cu128 URL with an encoded plus'

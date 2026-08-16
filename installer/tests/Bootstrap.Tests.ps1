@@ -82,7 +82,7 @@ $planOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSSc
     -ManifestPath "$PSScriptRoot\..\manifests\components-v0.1.0.json" `
     -ModelManifestPath "$PSScriptRoot\..\manifests\models.json" -HardwareProfilePath $profilePath -WhatIf 2>&1)
 Assert-Equal 0 $LASTEXITCODE 'production manifest WhatIf exits successfully'
-Assert-True (($planOutput -join "`n") -match 'github.com/HeiXia2077/live-avatar/releases/download/v0.1.0') 'WhatIf prints release payload URL'
+Assert-True (($planOutput -join "`n") -match 'github.com/Jiahui-Kenneth/live-avatar/releases/download/v0.1.0') 'WhatIf prints fork release payload URL'
 Assert-True (($planOutput -join "`n") -match 'huggingface.co/.+Qwen3.5') 'WhatIf prints selected model URL'
 Assert-True (-not (Test-Path -LiteralPath (Join-Path $root 'Plan Only'))) 'WhatIf creates no install directory'
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/HeiXia2077/live-avatar/installer/models.schema.json",
+  "$id": "https://github.com/Jiahui-Kenneth/live-avatar/installer/models.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "catalog_version", "models"],
