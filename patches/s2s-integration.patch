@@ -27897,7 +27897,7 @@ index 7ecbf2d..91aec09 100644
    <body class="booting">
 +    <!-- Digital-human video, fixed as a full-viewport background layer -->
 +    <div id="avatar-stage" class="avatar-stage" aria-hidden="true">
-+      <iframe id="avatar-frame" src="http://127.0.0.1:8010/embed.html" allow="autoplay; microphone" frameborder="0"></iframe>
++      <iframe id="avatar-frame" src="http://127.0.0.1:8010/embed.html?v=static-avatar" allow="autoplay; microphone" frameborder="0"></iframe>
 +    </div>
 +
      <div id="app">
