@@ -11,6 +11,20 @@ index 7e076c2..7998215 100644
          loop.run_until_complete(site.start())
          if opt.transport=='rtcpush':
              for k in range(opt.max_session):
+diff --git a/avatars/wav2lip/genavatar.py b/avatars/wav2lip/genavatar.py
+index e978d2b..78a47c4 100644
+--- a/avatars/wav2lip/genavatar.py
++++ b/avatars/wav2lip/genavatar.py
+@@ -107,8 +107,7 @@ def generate_avatar(video_path, avatar_id, save_path='./data/avatars', img_size=
+     pady1, pady2, padx1, padx2 = pads
+     for rect, image in zip(predictions, frames):
+         if rect is None:
+-            rect = [0, 0, image.shape[1], image.shape[0]]
+-
++            raise RuntimeError("No face detected in avatar frame")
+         y1 = max(0, rect[1] - pady1)
+         y2 = min(image.shape[0], rect[3] + pady2)
+         x1 = max(0, rect[0] - padx1)
 diff --git a/config.py b/config.py
 index 6839ce0..dd124b8 100644
 --- a/config.py
@@ -24,6 +38,122 @@ index 6839ce0..dd124b8 100644
  
      # ─── 虚拟摄像头 ───────────────────────────────────────────────────
      parser.add_argument('--audio_output_device', type=int, default=None,
+diff --git a/server/avatar_image.py b/server/avatar_image.py
+new file mode 100644
+index 0000000..383b7b1
+--- /dev/null
++++ b/server/avatar_image.py
+@@ -0,0 +1,110 @@
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Callable, Iterable, Sequence
++
++import cv2
++import numpy as np
++
++
++MAX_IMAGE_BYTES = 10 * 1024 * 1024
++TARGET_WIDTH = 576
++TARGET_HEIGHT = 768
++MIN_FACE_AREA_RATIO = 0.02
++MIN_FACE_EDGE = 96
++MIN_FACE_CONFIDENCE = 0.5
++
++
++class AvatarImageError(ValueError):
++    def __init__(self, code: str, message: str):
++        self.code = code
++        self.message = message
++        super().__init__(f"{code}: {message}")
++
++
++@dataclass(frozen=True)
++class ValidatedImage:
++    image_bgr: np.ndarray
++    face_box: tuple[int, int, int, int]
++
++
++def validate_avatar_image(
++    payload: bytes,
++    detect_faces: Callable[[np.ndarray], Iterable[Sequence[float]]],
++) -> ValidatedImage:
++    if len(payload) > MAX_IMAGE_BYTES:
++        raise AvatarImageError("image_too_large", "Image exceeds 10 MiB")
++
++    raw = np.frombuffer(payload, dtype=np.uint8)
++    image = cv2.imdecode(raw, cv2.IMREAD_COLOR)
++    if image is None:
++        raise AvatarImageError("invalid_image", "JPEG, PNG, or WebP required")
++    if image.shape[:2] != (TARGET_HEIGHT, TARGET_WIDTH):
++        raise AvatarImageError("wrong_dimensions", "Image must be 576x768")
++
++    faces = []
++    for box in detect_faces(image):
++        if len(box) >= 5 and float(box[4]) >= MIN_FACE_CONFIDENCE:
++            faces.append(box)
++    if not faces:
++        raise AvatarImageError("no_face", "No face detected")
++    if len(faces) > 1:
++        raise AvatarImageError("multiple_faces", "Multiple faces detected")
++
++    x1, y1, x2, y2 = (float(value) for value in faces[0][:4])
++    face_width = max(0.0, x2 - x1)
++    face_height = max(0.0, y2 - y1)
++    face_area_ratio = face_width * face_height / (TARGET_WIDTH * TARGET_HEIGHT)
++    if face_area_ratio < MIN_FACE_AREA_RATIO or min(face_width, face_height) < MIN_FACE_EDGE:
++        raise AvatarImageError("face_too_small", "Face is too small; crop closer")
++
++    clipped = (
++        max(0, min(TARGET_WIDTH, int(x1))),
++        max(0, min(TARGET_HEIGHT, int(y1))),
++        max(0, min(TARGET_WIDTH, int(x2))),
++        max(0, min(TARGET_HEIGHT, int(y2))),
++    )
++    return ValidatedImage(image_bgr=image, face_box=clipped)
++
++
++def detect_faces_sfd(image_bgr: np.ndarray):
++    import torch
++    from avatars.wav2lip import face_detection
++
++    device = "cuda" if torch.cuda.is_available() else "cpu"
++    detector = face_detection.FaceAlignment(
++        face_detection.LandmarksType._2D,
++        flip_input=False,
++        device=device,
++    )
++    try:
++        image_rgb = image_bgr[..., ::-1].copy()
++        return detector.face_detector.detect_from_image(image_rgb)
++    finally:
++        del detector
++        if device == "cuda":
++            torch.cuda.empty_cache()
++
++
++def write_still_video(
++    image_bgr: np.ndarray,
++    target: Path,
++    fps: int = 25,
++    frames: int = 25,
++) -> None:
++    if image_bgr.shape != (TARGET_HEIGHT, TARGET_WIDTH, 3):
++        raise AvatarImageError("wrong_dimensions", "Image must be 576x768")
++    target = Path(target)
++    target.parent.mkdir(parents=True, exist_ok=True)
++    writer = cv2.VideoWriter(
++        str(target),
++        cv2.VideoWriter_fourcc(*"mp4v"),
++        fps,
++        (TARGET_WIDTH, TARGET_HEIGHT),
++    )
++    if not writer.isOpened():
++        raise AvatarImageError("video_encoder_unavailable", "Cannot create avatar input video")
++    try:
++        for _ in range(frames):
++            writer.write(image_bgr)
++    finally:
++        writer.release()
 diff --git a/server/avatar_store.py b/server/avatar_store.py
 new file mode 100644
 index 0000000..fe65c57
@@ -248,6 +378,106 @@ index 8037d06..38cca25 100644
      app.router.add_post("/set_audiotype", set_audiotype)
      app.router.add_post("/record", record)
      app.router.add_post("/interrupt_talk", interrupt_talk)
+diff --git a/tests/test_avatar_image.py b/tests/test_avatar_image.py
+new file mode 100644
+index 0000000..c8c2eed
+--- /dev/null
++++ b/tests/test_avatar_image.py
+@@ -0,0 +1,94 @@
++import tempfile
++import unittest
++from pathlib import Path
++
++import cv2
++import numpy as np
++
++from server.avatar_image import (
++    MAX_IMAGE_BYTES,
++    AvatarImageError,
++    validate_avatar_image,
++    write_still_video,
++)
++
++
++class AvatarImageTest(unittest.TestCase):
++    def encoded(self, width=576, height=768, extension=".jpg"):
++        image = np.zeros((height, width, 3), dtype=np.uint8)
++        ok, data = cv2.imencode(extension, image)
++        self.assertTrue(ok)
++        return data.tobytes()
++
++    def assert_error_code(self, code, payload, detector):
++        with self.assertRaises(AvatarImageError) as raised:
++            validate_avatar_image(payload, detector)
++        self.assertEqual(raised.exception.code, code)
++
++    def test_accepts_one_large_face(self):
++        out = validate_avatar_image(
++            self.encoded(),
++            lambda image: [(160, 120, 416, 500, 0.99)],
++        )
++        self.assertEqual(out.image_bgr.shape, (768, 576, 3))
++        self.assertEqual(out.face_box, (160, 120, 416, 500))
++
++    def test_rejects_payload_larger_than_ten_mib(self):
++        self.assert_error_code(
++            "image_too_large",
++            b"x" * (MAX_IMAGE_BYTES + 1),
++            lambda image: [],
++        )
++
++    def test_rejects_corrupt_and_wrong_size_images(self):
++        self.assert_error_code("invalid_image", b"not-an-image", lambda image: [])
++        self.assert_error_code(
++            "wrong_dimensions",
++            self.encoded(width=575),
++            lambda image: [(0, 0, 200, 200, 0.99)],
++        )
++
++    def test_rejects_zero_or_multiple_significant_faces(self):
++        self.assert_error_code("no_face", self.encoded(), lambda image: [])
++        self.assert_error_code(
++            "no_face",
++            self.encoded(),
++            lambda image: [(100, 100, 400, 500, 0.49)],
++        )
++        self.assert_error_code(
++            "multiple_faces",
++            self.encoded(),
++            lambda image: [
++                (50, 50, 250, 300, 0.99),
++                (300, 80, 500, 330, 0.96),
++            ],
++        )
++
++    def test_rejects_face_smaller_than_minimum_wav2lip_crop(self):
++        self.assert_error_code(
++            "face_too_small",
++            self.encoded(),
++            lambda image: [(0, 0, 60, 60, 0.99)],
++        )
++
++    def test_writes_exactly_twenty_five_still_frames(self):
++        image = np.zeros((768, 576, 3), dtype=np.uint8)
++        with tempfile.TemporaryDirectory() as temp:
++            target = Path(temp) / "still.mp4"
++            write_still_video(image, target)
++            capture = cv2.VideoCapture(str(target))
++            try:
++                decoded = 0
++                while True:
++                    ok, frame = capture.read()
++                    if not ok:
++                        break
++                    self.assertEqual(frame.shape, image.shape)
++                    decoded += 1
++            finally:
++                capture.release()
++            self.assertEqual(decoded, 25)
++
++
++if __name__ == "__main__":
++    unittest.main()
 diff --git a/tests/test_avatar_store.py b/tests/test_avatar_store.py
 new file mode 100644
 index 0000000..03c3998
