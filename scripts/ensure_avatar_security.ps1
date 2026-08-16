@@ -3,7 +3,8 @@ param(
     [string]$DataRoot
 )
 
-$configDir = Join-Path $DataRoot 'config'
+$resolvedDataRoot = [IO.Path]::GetFullPath($DataRoot)
+$configDir = Join-Path $resolvedDataRoot 'config'
 $tokenPath = Join-Path $configDir 'avatar-admin-token.txt'
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 
