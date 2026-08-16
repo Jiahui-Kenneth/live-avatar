@@ -2,6 +2,8 @@
 
 > 本文档从零开始，带你在一台 **Windows + NVIDIA GPU** 的机器上部署完整的中文语音对话数字人。
 
+> 如果不需要修改上游源码，优先使用[小型联网安装包](INSTALLER.md)：它不要求目标电脑安装 Git 或编译器，并会按显存推荐 4B / 9B / 27B / 35B 模型。本文保留手动安装和故障排查流程。
+
 ## 目录
 
 1. [硬件与系统要求](#1-硬件与系统要求)
@@ -22,7 +24,7 @@
 | OS | Windows 10/11 64 位 | 本教程以 Windows 为准 |
 | GPU | **NVIDIA，16GB 显存** | RTX 4070 Ti / 4080 / 5060 Ti 等 |
 | 驱动 | 最新 NVIDIA 驱动 | 需支持 CUDA 12.x |
-| CUDA | 12.1+ | 与 PyTorch 版本匹配 |
+| CUDA | PyTorch CUDA 12.8 | RTX 50/Blackwell 使用 cu128 wheel |
 | 内存 | 32GB 推荐 | 多个模型常驻 |
 | 磁盘 | 至少 60GB 空闲 | 模型权重 + 依赖 |
 | 网络 | 能访问 GitHub / HF / 国内镜像 | 见注意事项 |
@@ -125,9 +127,17 @@ git clone https://gitee.com/lipku/LiveTalking.git C:\LiveTalking
 cd C:\LiveTalking
 py -3.11 -m venv .venv
 .venv\Scripts\activate
-pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 ```
+
+安装完成后验证 Blackwell 支持：
+
+```bat
+.venv\Scripts\python.exe -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_device_capability())"
+```
+
+RTX 5090 应看到 `2.11.0+cu128`、`12.8` 和 `(12, 0)`。
 
 **下载数字人模型**（从 LiveTalking README 的网盘链接）：
 

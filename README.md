@@ -28,7 +28,7 @@
 ┌─────────────┐   ┌──────────────┐   ┌────────────┐   ┌───────────────┐
 │  llama-server │──▶│  s2s backend │──▶│  s2s demo  │   │  LiveTalking    │
 │  (LLM, :8080) │   │  (管线, :8765)│   │ (网页, :7860)│──▶│ (数字人, :8010) │
-│   Qwen3.5-9B  │   │ VAD+STT+TTS  │   │             │   │  wav2lip 口型   │
+│ Qwen3.5 4B-35B│   │ VAD+STT+TTS  │   │             │   │  wav2lip 口型   │
 └────────────┘   └──────┬───────┘   └────────────┘   └───▲───────────┘
                         │  音频 (16kHz int16 PCM)          │
                         └──────────────┬─────────────────┘
@@ -39,7 +39,13 @@
 
 ## 快速开始
 
-> 详细步骤见 [部署教程](docs/DEPLOYMENT.md)。要求：Windows + NVIDIA GPU（16GB 显存推荐）。
+> 推荐使用 [联网安装包](docs/INSTALLER.md)。它会检测显存，在 4B / 9B / 27B / 35B 四档中自动推荐并下载；详细手动步骤见 [部署教程](docs/DEPLOYMENT.md)。
+
+### 小型联网安装包
+
+运行 `LiveAvatar-Setup-0.1.0.exe`，选择程序目录和数据目录即可。安装器本身约 2.1 MB，不内置模型；所有载荷支持断点续传、固定字节数和 SHA-256 校验。RTX 50/Blackwell 使用 PyTorch 2.11.0 CUDA 12.8。安装、迁移、修复、卸载保留规则见 [安装包说明](docs/INSTALLER.md)。
+
+### 手动安装
 
 ```bat
 git clone https://github.com/你的用户名/live-avatar.git
