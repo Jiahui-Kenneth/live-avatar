@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 7e076c2..482a8b6 100644
+index 7e076c2..90a6b90 100644
 --- a/app.py
 +++ b/app.py
 @@ -53,6 +53,7 @@ from typing import Dict
@@ -10,7 +10,7 @@ index 7e076c2..482a8b6 100644
  from dotenv import load_dotenv
  
  
-@@ -176,12 +177,30 @@ def main():
+@@ -176,12 +177,31 @@ def main():
      appasync["opt"] = opt
      appasync["rtc_manager"] = rtc_manager
  
@@ -30,6 +30,7 @@ index 7e076c2..482a8b6 100644
 +        "store": AvatarStore(avatar_data_root, {opt.avatar_id}),
 +        "guard": AvatarAdminGuard(avatar_admin_token, allowed_origins),
 +        "session_manager": session_manager,
++        "rtc_manager": rtc_manager,
 +    }
 +
      appasync.on_shutdown.append(on_shutdown)
@@ -42,7 +43,7 @@ index 7e076c2..482a8b6 100644
  
      # Configure default CORS settings.
      cors = aiohttp_cors.setup(appasync, defaults={
-@@ -206,7 +225,7 @@ def main():
+@@ -206,7 +226,7 @@ def main():
          loop = asyncio.new_event_loop()
          asyncio.set_event_loop(loop)
          loop.run_until_complete(runner.setup())
@@ -313,15 +314,16 @@ index 0000000..383b7b1
 +    finally:
 +        writer.release()
 diff --git a/server/avatar_routes.py b/server/avatar_routes.py
-index e0d4794..e7e40da 100644
+index e0d4794..bb9e95b 100644
 --- a/server/avatar_routes.py
 +++ b/server/avatar_routes.py
-@@ -1,136 +1,320 @@
+@@ -1,136 +1,337 @@
 -import os
 +import hashlib
  import json
 +import shutil
  import uuid
++import re
 +from datetime import datetime, timezone
 +from pathlib import Path
 +
@@ -345,6 +347,8 @@ index e0d4794..e7e40da 100644
 +TASK_MANAGER_KEY = web.AppKey("avatar_task_manager")
 +SESSION_MANAGER_KEY = web.AppKey("avatar_session_manager")
 +DETECT_FACES_KEY = web.AppKey("avatar_detect_faces")
++RTC_MANAGER_KEY = web.AppKey("avatar_rtc_manager")
++SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 +
 +
  def json_ok(data=None):
@@ -376,6 +380,7 @@ index e0d4794..e7e40da 100644
 +        request.app[TASK_MANAGER_KEY],
 +        request.app[SESSION_MANAGER_KEY],
 +        request.app[DETECT_FACES_KEY],
++        request.app[RTC_MANAGER_KEY],
      )
  
 +
@@ -401,7 +406,7 @@ index e0d4794..e7e40da 100644
 +
 +
 +async def create_image_avatar_task(request):
-+    store, guard, manager, _, detect_faces = _dependencies(request)
++    store, guard, manager, _, detect_faces, _ = _dependencies(request)
 +    guard.require(request)
 +    task_root = None
 +    try:
@@ -482,7 +487,7 @@ index e0d4794..e7e40da 100644
 +
 +
 +async def list_avatars(request):
-+    store, _, _, _, _ = _dependencies(request)
++    store, _, _, _, _, _ = _dependencies(request)
 +    try:
 +        return json_ok({"avatars": store.list_avatars()})
 +    except AvatarStoreError as exc:
@@ -490,7 +495,7 @@ index e0d4794..e7e40da 100644
 +
 +
 +async def active_avatar(request):
-+    store, _, _, _, _ = _dependencies(request)
++    store, _, _, _, _, _ = _dependencies(request)
 +    try:
 +        return json_ok({"active": store.get_active()})
 +    except AvatarStoreError as exc:
@@ -498,7 +503,7 @@ index e0d4794..e7e40da 100644
 +
 +
 +async def avatar_thumbnail(request):
-+    store, _, _, _, _ = _dependencies(request)
++    store, _, _, _, _, _ = _dependencies(request)
 +    try:
 +        avatar_id = validate_avatar_id(request.match_info.get("avatar_id", ""))
 +        target = (store.avatars_root / avatar_id / "thumbnail.jpg").resolve()
@@ -510,7 +515,7 @@ index e0d4794..e7e40da 100644
 +
 +
 +async def activate_avatar(request):
-+    store, guard, _, session_manager, _ = _dependencies(request)
++    store, guard, _, session_manager, _, _ = _dependencies(request)
 +    guard.require(request)
 +    try:
 +        params = await request.json()
@@ -525,7 +530,7 @@ index e0d4794..e7e40da 100644
 +
 +
 +async def delete_avatar(request):
-+    store, guard, _, session_manager, _ = _dependencies(request)
++    store, guard, _, session_manager, _, _ = _dependencies(request)
 +    guard.require(request)
 +    try:
 +        avatar_id = validate_avatar_id(request.match_info.get("avatar_id", ""))
@@ -535,13 +540,23 @@ index e0d4794..e7e40da 100644
 +        return json_error(str(exc))
 +
 +
++async def close_avatar_session(request):
++    _, guard, _, _, _, rtc_manager = _dependencies(request)
++    guard.require(request)
++    sessionid = request.match_info.get("sessionid", "")
++    if not SESSION_ID_RE.fullmatch(sessionid):
++        return json_error("invalid sessionid")
++    closed = await rtc_manager.close_session(sessionid)
++    return json_ok({"sessionid": sessionid, "closed": closed})
++
++
  async def create_avatar_task(request):
 -    """
 -    POST /api/avatar/task
 -    Parameters: model, avatar_id, video_file (upload), video_path (local), ...
 -    """
 +    """Legacy video avatar task endpoint."""
-+    _, _, manager, _, _ = _dependencies(request)
++    _, _, manager, _, _, _ = _dependencies(request)
      try:
 -        if request.content_type == 'multipart/form-data':
 +        if request.content_type == "multipart/form-data":
@@ -661,7 +676,7 @@ index e0d4794..e7e40da 100644
 -    """
 -    task_id = request.match_info.get('task_id')
 -    task = task_manager.get_task(task_id)
-+    _, _, manager, _, _ = _dependencies(request)
++    _, _, manager, _, _, _ = _dependencies(request)
 +    task = manager.get_task(request.match_info.get("task_id"))
      if not task:
          return json_error("Task not found", code=404)
@@ -675,7 +690,7 @@ index e0d4794..e7e40da 100644
 -    """
 -    tasks = task_manager.list_tasks()
 -    return json_ok(data={"tasks": tasks})
-+    _, _, manager, _, _ = _dependencies(request)
++    _, _, manager, _, _, _ = _dependencies(request)
 +    return json_ok({"tasks": manager.list_tasks()})
 +
  
@@ -685,7 +700,7 @@ index e0d4794..e7e40da 100644
 -    """
 -    task_id = request.match_info.get('task_id')
 -    success, msg = task_manager.delete_task(task_id)
-+    _, _, manager, _, _ = _dependencies(request)
++    _, _, manager, _, _, _ = _dependencies(request)
 +    success, message = manager.delete_task(request.match_info.get("task_id"))
      if not success:
 -        return json_error(msg)
@@ -700,6 +715,7 @@ index e0d4794..e7e40da 100644
 +    store,
 +    guard,
 +    session_manager,
++    rtc_manager,
 +    task_manager=default_task_manager,
 +    detect_faces=detect_faces_sfd,
 +):
@@ -708,6 +724,7 @@ index e0d4794..e7e40da 100644
 +    app[TASK_MANAGER_KEY] = task_manager
 +    app[SESSION_MANAGER_KEY] = session_manager
 +    app[DETECT_FACES_KEY] = detect_faces
++    app[RTC_MANAGER_KEY] = rtc_manager
  
 -def setup_avatar_routes(app):
 +    app.router.add_post("/api/avatar/image-task", create_image_avatar_task)
@@ -718,6 +735,7 @@ index e0d4794..e7e40da 100644
      app.router.add_get("/api/avatar/task/{task_id}", get_avatar_task_status)
      app.router.add_delete("/api/avatar/task/{task_id}", delete_avatar_task)
      app.router.add_get("/api/avatar/tasks", list_avatar_tasks)
++    app.router.add_delete("/api/avatar/session/{sessionid}", close_avatar_session)
 +    app.router.add_get("/api/avatar/{avatar_id}/thumbnail", avatar_thumbnail)
 +    app.router.add_delete("/api/avatar/{avatar_id}", delete_avatar)
 diff --git a/server/avatar_store.py b/server/avatar_store.py
@@ -958,6 +976,69 @@ index 8037d06..59c326a 100644
 +    setup_avatar_routes(app, **avatar_dependencies)
  
      app.router.add_static('/', path='web')
+diff --git a/server/rtc_manager.py b/server/rtc_manager.py
+index 1c72719..679c4c0 100644
+--- a/server/rtc_manager.py
++++ b/server/rtc_manager.py
+@@ -38,6 +38,18 @@ class RTCManager:
+         """
+         self.opt = opt
+         self.pcs: set = set()
++        self.session_pcs: dict[str, RTCPeerConnection] = {}
++
++    async def close_session(self, sessionid: str) -> bool:
++        """Close one peer connection and remove its avatar session."""
++        pc = self.session_pcs.pop(sessionid, None)
++        if pc is None:
++            session_manager.remove_session(sessionid)
++            return False
++        await pc.close()
++        self.pcs.discard(pc)
++        session_manager.remove_session(sessionid)
++        return True
+ 
+     async def _create_pc_and_answer(self, avatar_session, sessionid, offer):
+         """创建 PeerConnection、添加轨道、SDP 交换，返回已完成 answer 的 pc"""
+@@ -46,14 +58,13 @@ class RTCManager:
+             configuration=RTCConfiguration(iceServers=[ice_server])
+         )
+         self.pcs.add(pc)
++        self.session_pcs[sessionid] = pc
+ 
+         @pc.on("connectionstatechange")
+         async def on_connectionstatechange():
+             logger.info("Connection state is %s", pc.connectionState)
+             if pc.connectionState in ("failed", "closed"):
+-                await pc.close()
+-                self.pcs.discard(pc)
+-                session_manager.remove_session(sessionid)
++                await self.close_session(sessionid)
+ 
+         # 添加发送轨道
+         from server.webrtc import HumanPlayer
+@@ -149,13 +160,13 @@ class RTCManager:
+ 
+         pc = RTCPeerConnection()
+         self.pcs.add(pc)
++        self.session_pcs[sessionid] = pc
+ 
+         @pc.on("connectionstatechange")
+         async def on_connectionstatechange():
+             logger.info("Connection state is %s", pc.connectionState)
+             if pc.connectionState == "failed":
+-                await pc.close()
+-                self.pcs.discard(pc)
++                await self.close_session(sessionid)
+ 
+         from server.webrtc import HumanPlayer
+         player = HumanPlayer(avatar_session)
+@@ -177,3 +188,6 @@ class RTCManager:
+         coros = [pc.close() for pc in self.pcs]
+         await asyncio.gather(*coros)
+         self.pcs.clear()
++        for sessionid in list(self.session_pcs):
++            session_manager.remove_session(sessionid)
++        self.session_pcs.clear()
 diff --git a/server/task_manager.py b/server/task_manager.py
 index 585a6a5..05a8db4 100644
 --- a/server/task_manager.py
@@ -1245,10 +1326,10 @@ index 0000000..c8c2eed
 +    unittest.main()
 diff --git a/tests/test_avatar_routes.py b/tests/test_avatar_routes.py
 new file mode 100644
-index 0000000..90ebcd8
+index 0000000..ba719a8
 --- /dev/null
 +++ b/tests/test_avatar_routes.py
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,244 @@
 +import tempfile
 +import unittest
 +from pathlib import Path
@@ -1316,6 +1397,15 @@ index 0000000..90ebcd8
 +        self.sessions = {}
 +
 +
++class FakeRTCManager:
++    def __init__(self):
++        self.closed = []
++
++    async def close_session(self, sessionid):
++        self.closed.append(sessionid)
++        return True
++
++
 +class AvatarTaskManagerTest(unittest.TestCase):
 +    def test_serializes_stage_result_and_runs_callbacks(self):
 +        manager = TaskManager(max_workers=1)
@@ -1354,6 +1444,7 @@ index 0000000..90ebcd8
 +        self.guard = AvatarAdminGuard("secret", {ORIGIN}, now=lambda: NOW)
 +        self.tasks = FakeTaskManager()
 +        self.sessions = FakeSessionManager()
++        self.rtc = FakeRTCManager()
 +        self.app = web.Application(client_max_size=12 * 1024 * 1024)
 +        setup_avatar_routes(
 +            self.app,
@@ -1361,6 +1452,7 @@ index 0000000..90ebcd8
 +            guard=self.guard,
 +            task_manager=self.tasks,
 +            session_manager=self.sessions,
++            rtc_manager=self.rtc,
 +            detect_faces=lambda image: [(160, 120, 416, 500, 0.99)],
 +        )
 +        self.client = TestClient(TestServer(self.app))
@@ -1469,6 +1561,16 @@ index 0000000..90ebcd8
 +        )
 +        self.assertEqual((await response.json())["code"], -1)
 +
++    async def test_authenticated_session_close(self):
++        anonymous = await self.client.delete("/api/avatar/session/sid-old")
++        self.assertEqual(anonymous.status, 403)
++        response = await self.client.delete(
++            "/api/avatar/session/sid-old",
++            headers=ADMIN_HEADERS,
++        )
++        self.assertEqual((await response.json())["code"], 0)
++        self.assertEqual(self.rtc.closed, ["sid-old"])
++
 +
 +if __name__ == "__main__":
 +    unittest.main()
@@ -1575,6 +1677,53 @@ index 0000000..03c3998
 +        self.store.delete("avatar_unused", set())
 +
 +        self.assertFalse(target.exists())
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_rtc_session_close.py b/tests/test_rtc_session_close.py
+new file mode 100644
+index 0000000..d6d20e4
+--- /dev/null
++++ b/tests/test_rtc_session_close.py
+@@ -0,0 +1,41 @@
++import unittest
++from types import SimpleNamespace
++
++from server.rtc_manager import RTCManager
++from server.session_manager import session_manager
++
++
++class FakePc:
++    def __init__(self):
++        self.closed = False
++
++    async def close(self):
++        self.closed = True
++
++
++class RTCSessionCloseTest(unittest.IsolatedAsyncioTestCase):
++    async def asyncTearDown(self):
++        session_manager.sessions.clear()
++
++    async def test_close_session_closes_pc_and_removes_avatar_session(self):
++        manager = RTCManager(SimpleNamespace(stun=""))
++        pc = FakePc()
++        manager.pcs.add(pc)
++        manager.session_pcs["sid"] = pc
++        session_manager.sessions["sid"] = object()
++
++        self.assertTrue(await manager.close_session("sid"))
++        self.assertTrue(pc.closed)
++        self.assertNotIn("sid", session_manager.sessions)
++        self.assertNotIn("sid", manager.session_pcs)
++        self.assertNotIn(pc, manager.pcs)
++
++    async def test_close_missing_session_is_idempotent(self):
++        manager = RTCManager(SimpleNamespace(stun=""))
++        session_manager.sessions["missing"] = object()
++        self.assertFalse(await manager.close_session("missing"))
++        self.assertNotIn("missing", session_manager.sessions)
 +
 +
 +if __name__ == "__main__":

@@ -17,9 +17,18 @@
 <audio id="audio" autoplay></audio>
 <span id="status">连接中...</span>
 <script>
+const params = new URLSearchParams(location.search);
+const requestedAvatar = params.get('avatar') || '';
+const avatarId = /^[a-z0-9][a-z0-9_-]{2,63}$/.test(requestedAvatar)
+    ? requestedAvatar : '';
 let pc = null;
 let sessionid = null;
 let retryTimer = null;
+let allowRetry = true;
+
+function postState(state) {
+    parent.postMessage({ type: 'lt-state', state, avatarId }, '*');
+}
 
 function setStatus(ok, msg) {
     const el = document.getElementById('status');
@@ -28,7 +37,8 @@ function setStatus(ok, msg) {
 }
 
 function start() {
-    if (pc) return;
+    if (pc || !allowRetry) return;
+    postState('connecting');
     setStatus(false, '连接中...');
     const config = { sdpSemantics: 'unified-plan', iceServers: [] };
     pc = new RTCPeerConnection(config);
@@ -45,12 +55,14 @@ function start() {
     });
     pc.addEventListener('connectionstatechange', () => {
         if (pc.connectionState === 'connected') {
+            postState('connected');
             setStatus(true, '已连接');
             if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
         } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+            postState('disconnected');
             setStatus(false, '连接断开，重连中...');
             stop();
-            retryTimer = setTimeout(start, 3000);
+            if (allowRetry) retryTimer = setTimeout(start, 3000);
         }
     });
     pc.createOffer().then(offer => pc.setLocalDescription(offer)).then(() =>
@@ -66,14 +78,23 @@ function start() {
         return fetch('/offer', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sdp: offer.sdp, type: offer.type }),
+            body: JSON.stringify({
+                sdp: offer.sdp,
+                type: offer.type,
+                avatar: avatarId || undefined,
+            }),
         });
     }).then(res => res.json()).then(answer => {
         if (answer.code && answer.code !== 0) throw new Error(answer.msg || 'server error');
         if (!answer.sdp) throw new Error('no sdp');
-        if (answer.sessionid) { sessionid = answer.sessionid; parent.postMessage({ type: 'lt-session', sessionid }, '*'); }
+        if (answer.sessionid) {
+            sessionid = answer.sessionid;
+            parent.postMessage({ type: 'lt-session', sessionid, avatarId }, '*');
+        }
         return pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answer.sdp }));
     }).catch(e => {
+        if (!allowRetry) return;
+        postState('failed');
         setStatus(false, '连接失败: ' + (e.message || e));
         stop();
         retryTimer = setTimeout(start, 5000);
@@ -81,8 +102,27 @@ function start() {
 }
 
 function stop() {
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
     if (pc) { pc.close(); pc = null; }
+    for (const id of ['video', 'audio']) {
+        const element = document.getElementById(id);
+        element.pause();
+        element.srcObject = null;
+    }
 }
+
+window.addEventListener('message', event => {
+    if (!event.data || event.data.type !== 'lt-stop') return;
+    allowRetry = false;
+    const stoppedSession = sessionid;
+    stop();
+    postState('stopped');
+    parent.postMessage({
+        type: 'lt-stopped',
+        sessionid: stoppedSession,
+        avatarId,
+    }, '*');
+});
 
 start();
 </script>
