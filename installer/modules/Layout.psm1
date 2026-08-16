@@ -179,6 +179,11 @@ function Resolve-LiveAvatarLayout {
         llama_root = [IO.Path]::GetFullPath((Join-Path $install ([string]$config.components.llama.relative_path).Replace('/','\')))
         s2s_root = [IO.Path]::GetFullPath((Join-Path $install ([string]$config.components.s2s.relative_path).Replace('/','\')))
         livetalking_root = [IO.Path]::GetFullPath((Join-Path $install ([string]$config.components.livetalking.relative_path).Replace('/','\')))
+        launcher_root = [IO.Path]::GetFullPath((Join-Path $install ([string]$config.components.launcher.relative_path).Replace('/','\')))
+        avatars_root = Join-Path $dataRoot 'avatars'
+        cache_root = Join-Path $dataRoot 'cache'
+        logs_root = Join-Path $dataRoot 'logs'
+        temp_root = Join-Path $dataRoot 'temp'
     }
 }
 

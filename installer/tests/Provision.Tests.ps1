@@ -54,6 +54,10 @@ Copy-Item -LiteralPath $s2sZip -Destination (Join-Path $downloads $s2sComponent.
 $installedS2s = Install-LiveAvatarComponent -Component $s2sComponent -Layout $layout -DownloadRoot $downloads
 Assert-Equal (Join-Path $layout.version_root 'speech-to-speech') $installedS2s 'source bundle target'
 Assert-True (Test-Path -LiteralPath (Join-Path $installedS2s 'demo/server.py') -PathType Leaf) 'source bundle required file staged'
+Remove-Item -LiteralPath (Join-Path $installedS2s 'demo/server.py') -Force
+$repairedS2s = Install-LiveAvatarComponent -Component $s2sComponent -Layout $layout -DownloadRoot $downloads -Repair
+Assert-True (Test-Path -LiteralPath (Join-Path $repairedS2s 'demo/server.py') -PathType Leaf) 'repair replaces an incomplete source bundle'
+Assert-Equal 1 @(Get-ChildItem -LiteralPath $layout.version_root -Directory | Where-Object Name -like 'speech-to-speech.bad-*').Count 'repair retains the incomplete source as quarantine'
 
 $badZip = Join-Path $sources 'bad.zip'
 New-TestZip $badZip @{'../escape.txt'='unsafe'}

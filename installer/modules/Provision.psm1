@@ -134,7 +134,7 @@ function Install-PythonRuntime {
 }
 
 function Install-ZipComponent {
-    param($Component, $Layout, [string]$ArtifactPath)
+    param($Component, $Layout, [string]$ArtifactPath, [switch]$Repair)
     $target = Get-ComponentTarget $Component $Layout
     $stage = Join-Path $Layout.temp_root ("stage-$($Component.id)-" + [guid]::NewGuid().ToString('N'))
     Expand-SafeZip $ArtifactPath $stage
@@ -147,7 +147,9 @@ function Install-ZipComponent {
         }
         if (Test-Path -LiteralPath $target -PathType Container) {
             try { Assert-RequiredFiles $Component $target; return $target } catch {}
-            throw "component target already exists but is incomplete: $target"
+            if (-not $Repair) { throw "component target already exists but is incomplete: $target" }
+            $quarantine = "$target.bad-$(Get-Date -Format 'yyyyMMdd-HHmmssfff')-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+            Move-Item -LiteralPath $target -Destination $quarantine
         }
         $targetParent = Split-Path -Parent $target
         New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
@@ -241,14 +243,15 @@ function Install-LiveAvatarComponent {
         [Parameter(Mandatory = $true)]$Layout,
         [Parameter(Mandatory = $true)][string]$DownloadRoot,
         [string]$WheelLockPath,
-        [scriptblock]$ProcessAction
+        [scriptblock]$ProcessAction,
+        [switch]$Repair
     )
     $artifactPath = Join-Path ([IO.Path]::GetFullPath($DownloadRoot)) ([string]$Component.filename)
     if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) { throw "verified artifact is missing: $artifactPath" }
     $kind = [string]$Component.install_kind
     switch ($kind) {
         'python_exe' { return Install-PythonRuntime $Component $Layout $artifactPath $ProcessAction }
-        { $_ -in @('zip','zip_overlay','source_bundle') } { return Install-ZipComponent $Component $Layout $artifactPath }
+        { $_ -in @('zip','zip_overlay','source_bundle') } { return Install-ZipComponent $Component $Layout $artifactPath -Repair:$Repair }
         'wheelhouse' { return Install-Wheelhouse $Component $Layout $artifactPath $WheelLockPath $ProcessAction }
         'gguf' {
             $bytes = [IO.File]::ReadAllBytes($artifactPath)
@@ -349,7 +352,7 @@ function Invoke-LiveAvatarProvisioning {
     $componentBytes = [int64]0
     foreach ($component in $Components) { $componentBytes += [int64]$component.bytes }
     $installRequired = [int64]([Math]::Ceiling($componentBytes * 2.0)) + 512MB
-    $modelRequired = [int64]([Math]::Ceiling([int64]$modelArtifact.bytes * 1.10))
+    $modelRequired = [int64]([Math]::Ceiling([int64]$modelArtifact.bytes * 1.10)) + 6GB
     if ($PlanOnly) {
         return [pscustomobject]@{
             plan_only=$true;downloads=$downloads;required_bytes=$requiredBytes
