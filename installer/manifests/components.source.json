@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "catalog_version": "0.1.0-source",
+  "components": [
+    {
+      "id": "python-3-11-9",
+      "install_kind": "python_exe",
+      "version": "3.11.9",
+      "filename": "python-3.11.9-amd64.exe",
+      "urls": ["https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"],
+      "bytes": 26216840,
+      "sha256": "5ee42c4eee1e6b4464bb23722f90b45303f79442df63083f05322f1785f5fdde"
+    },
+    {
+      "id": "llama-cuda",
+      "install_kind": "zip",
+      "version": "b10437",
+      "filename": "llama-b10437-bin-win-cuda-12.4-x64.zip",
+      "urls": ["https://github.com/ggml-org/llama.cpp/releases/download/b10437/llama-b10437-bin-win-cuda-12.4-x64.zip"],
+      "bytes": 250797514,
+      "sha256": "4bda1e9c7836489b4cacf0cfea1f74eb732ead6300bc61071ce8e6dbd6bcdcd2",
+      "required_files": ["llama-server.exe"]
+    },
+    {
+      "id": "llama-cudart",
+      "install_kind": "zip_overlay",
+      "version": "b10437",
+      "filename": "cudart-llama-bin-win-cuda-12.4-x64.zip",
+      "urls": ["https://github.com/ggml-org/llama.cpp/releases/download/b10437/cudart-llama-bin-win-cuda-12.4-x64.zip"],
+      "bytes": 391443627,
+      "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6"
+    },
+    {
+      "id": "wav2lip-model",
+      "install_kind": "google_drive",
+      "version": "wav2lip256",
+      "filename": "wav2lip256.pth",
+      "file_id": "1wu6XujFL9rF-0P2l44G6kpeapeY0cME7",
+      "urls": ["https://drive.usercontent.google.com/download?id=1wu6XujFL9rF-0P2l44G6kpeapeY0cME7&export=download&confirm=t"],
+      "bytes": 214670409,
+      "sha256": "b22d7ac86295df667644b17254dc71250c2600b89e20403e90e58812450bc173"
+    },
+    {
+      "id": "default-avatar",
+      "install_kind": "google_drive_archive",
+      "version": "wav2lip256-avatar1",
+      "filename": "wav2lip256_avatar1.tar.gz",
+      "file_id": "1aU-9SMEAZWN00hbvAGlRHG2iB17r9dEW",
+      "urls": ["https://drive.usercontent.google.com/download?id=1aU-9SMEAZWN00hbvAGlRHG2iB17r9dEW&export=download&confirm=t"],
+      "bytes": 353005497,
+      "sha256": "8e8c82bf973b91db799ed8b557d1b869438e094bcd1b0cf0bd72b208d5329369"
+    },
+    {
+      "id": "speech-to-speech-source",
+      "install_kind": "git_source",
+      "version": "656099a",
+      "url": "https://github.com/huggingface/speech-to-speech.git",
+      "revision": "656099afffda445a3a3cef8ffee55871c9b6123c"
+    },
+    {
+      "id": "livetalking-source",
+      "install_kind": "git_source",
+      "version": "c963ad4",
+      "url": "https://gitee.com/lipku/LiveTalking.git",
+      "revision": "c963ad409c556918b7d23999bf87c47a7c05c932"
+    },
+    {
+      "id": "torch-cu128",
+      "install_kind": "python_package",
+      "version": "2.11.0+cu128",
+      "package": "torch",
+      "index_url": "https://download.pytorch.org/whl/cu128"
+    },
+    {
+      "id": "torchvision-cu128",
+      "install_kind": "python_package",
+      "version": "0.26.0+cu128",
+      "package": "torchvision",
+      "index_url": "https://download.pytorch.org/whl/cu128"
+    },
+    {
+      "id": "torchaudio-cu128",
+      "install_kind": "python_package",
+      "version": "2.11.0+cu128",
+      "package": "torchaudio",
+      "index_url": "https://download.pytorch.org/whl/cu128"
+    }
+  ]
+}

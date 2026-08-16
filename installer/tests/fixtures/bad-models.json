@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "catalog_version": "test",
+  "models": [
+    {
+      "id": "missing-hash",
+      "revision": "0000000000000000000000000000000000000000",
+      "filename": "missing.gguf",
+      "url": "https://example.invalid/missing.gguf",
+      "bytes": 1,
+      "full_gpu_min_vram_mib": 1,
+      "recommended_vram_mib": 1,
+      "hybrid_min_vram_mib": 1,
+      "ctx_size": 8192,
+      "gpu_layers": 999,
+      "hybrid_gpu_layers": 1,
+      "reasoning": "off",
+      "jinja": true
+    }
+  ]
+}
