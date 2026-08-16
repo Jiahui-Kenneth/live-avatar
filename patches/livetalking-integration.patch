@@ -24,6 +24,156 @@ index 6839ce0..dd124b8 100644
  
      # ─── 虚拟摄像头 ───────────────────────────────────────────────────
      parser.add_argument('--audio_output_device', type=int, default=None,
+diff --git a/server/avatar_store.py b/server/avatar_store.py
+new file mode 100644
+index 0000000..fe65c57
+--- /dev/null
++++ b/server/avatar_store.py
+@@ -0,0 +1,144 @@
++import json
++import os
++import re
++import shutil
++import threading
++from pathlib import Path
++
++
++AVATAR_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{2,63}$")
++
++
++class AvatarStoreError(RuntimeError):
++    pass
++
++
++class AvatarInvalid(AvatarStoreError):
++    pass
++
++
++class AvatarConflict(AvatarStoreError):
++    pass
++
++
++class AvatarNotFound(AvatarStoreError):
++    pass
++
++
++def validate_avatar_id(avatar_id: str) -> str:
++    value = str(avatar_id or "")
++    if not AVATAR_ID_RE.fullmatch(value):
++        raise AvatarInvalid("avatar_id must contain 3-64 lowercase letters, digits, underscores, or hyphens")
++    return value
++
++
++class AvatarStore:
++    def __init__(self, data_root: Path, builtin_ids: set[str]):
++        self.data_root = Path(data_root).resolve()
++        self.avatars_root = self.data_root / "avatars"
++        self.config_root = self.data_root / "config"
++        self.builtin_ids = frozenset(validate_avatar_id(item) for item in builtin_ids)
++        self.active_path = self.config_root / "active-avatar.json"
++        self._lock = threading.RLock()
++        self.avatars_root.mkdir(parents=True, exist_ok=True)
++        self.config_root.mkdir(parents=True, exist_ok=True)
++
++    def _avatar_path(self, avatar_id: str) -> Path:
++        safe_id = validate_avatar_id(avatar_id)
++        target = (self.avatars_root / safe_id).resolve()
++        if target.parent != self.avatars_root:
++            raise AvatarInvalid("avatar path escapes the avatar data root")
++        return target
++
++    @staticmethod
++    def _read_json(path: Path) -> dict:
++        try:
++            value = json.loads(path.read_text(encoding="utf-8"))
++        except (OSError, ValueError) as exc:
++            raise AvatarInvalid(f"invalid metadata: {path.name}") from exc
++        if not isinstance(value, dict):
++            raise AvatarInvalid(f"invalid metadata: {path.name}")
++        return value
++
++    @staticmethod
++    def _write_json(path: Path, value: dict) -> None:
++        path.parent.mkdir(parents=True, exist_ok=True)
++        temp = path.with_suffix(path.suffix + ".tmp")
++        temp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
++        os.replace(temp, path)
++
++    def commit_staging(self, staged_avatar: Path, metadata: dict) -> Path:
++        avatar_id = validate_avatar_id(metadata.get("avatar_id", ""))
++        target = self._avatar_path(avatar_id)
++        staged = Path(staged_avatar).resolve()
++        with self._lock:
++            if target.exists():
++                raise AvatarConflict("avatar already exists")
++            if not staged.is_dir():
++                raise AvatarInvalid("staged avatar directory does not exist")
++            for required in ("full_imgs", "face_imgs", "coords.pkl"):
++                if not (staged / required).exists():
++                    raise AvatarInvalid(f"missing generated asset: {required}")
++            stored_metadata = dict(metadata)
++            stored_metadata.setdefault("schema_version", 1)
++            stored_metadata["avatar_id"] = avatar_id
++            stored_metadata.setdefault("built_in", avatar_id in self.builtin_ids)
++            self._write_json(staged / "metadata.json", stored_metadata)
++            os.replace(staged, target)
++        return target
++
++    def get_active(self) -> dict | None:
++        with self._lock:
++            if not self.active_path.exists():
++                return None
++            return self._read_json(self.active_path)
++
++    def activate(self, avatar_id: str, session_avatar_id: str) -> dict:
++        safe_id = validate_avatar_id(avatar_id)
++        if validate_avatar_id(session_avatar_id) != safe_id:
++            raise AvatarConflict("session avatar does not match requested avatar")
++        target = self._avatar_path(safe_id)
++        with self._lock:
++            if not target.is_dir():
++                raise AvatarNotFound("avatar not found")
++            active = {"schema_version": 1, "avatar_id": safe_id}
++            self._write_json(self.active_path, active)
++            return active
++
++    def list_avatars(self) -> list[dict]:
++        with self._lock:
++            active = self.get_active()
++            active_id = active.get("avatar_id") if active else None
++            items = []
++            for child in sorted(self.avatars_root.iterdir(), key=lambda path: path.name):
++                if not child.is_dir() or not AVATAR_ID_RE.fullmatch(child.name):
++                    continue
++                metadata_path = child / "metadata.json"
++                if metadata_path.exists():
++                    metadata = self._read_json(metadata_path)
++                else:
++                    metadata = {
++                        "schema_version": 1,
++                        "avatar_id": child.name,
++                        "display_name": child.name,
++                        "built_in": child.name in self.builtin_ids,
++                    }
++                metadata["active"] = child.name == active_id
++                metadata["has_thumbnail"] = (child / "thumbnail.jpg").is_file()
++                items.append(metadata)
++            return items
++
++    def delete(self, avatar_id: str, in_use_ids: set[str]) -> None:
++        safe_id = validate_avatar_id(avatar_id)
++        target = self._avatar_path(safe_id)
++        with self._lock:
++            if safe_id in self.builtin_ids:
++                raise AvatarConflict("built-in avatar cannot be deleted")
++            active = self.get_active()
++            if active and active.get("avatar_id") == safe_id:
++                raise AvatarConflict("active avatar cannot be deleted")
++            if safe_id in in_use_ids:
++                raise AvatarConflict("avatar is in use")
++            if not target.is_dir():
++                raise AvatarNotFound("avatar not found")
++            shutil.rmtree(target)
 diff --git a/server/routes.py b/server/routes.py
 index 8037d06..38cca25 100644
 --- a/server/routes.py
@@ -98,3 +248,110 @@ index 8037d06..38cca25 100644
      app.router.add_post("/set_audiotype", set_audiotype)
      app.router.add_post("/record", record)
      app.router.add_post("/interrupt_talk", interrupt_talk)
+diff --git a/tests/test_avatar_store.py b/tests/test_avatar_store.py
+new file mode 100644
+index 0000000..03c3998
+--- /dev/null
++++ b/tests/test_avatar_store.py
+@@ -0,0 +1,101 @@
++import json
++import tempfile
++import unittest
++from pathlib import Path
++
++from server.avatar_store import AvatarConflict, AvatarInvalid, AvatarStore
++
++
++class AvatarStoreTest(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.root = Path(self.tmp.name)
++        self.store = AvatarStore(self.root, {"myavatar"})
++
++    def tearDown(self):
++        self.tmp.cleanup()
++
++    def make_avatar(self, avatar_id: str) -> Path:
++        staged = self.root / "temp" / avatar_id
++        (staged / "full_imgs").mkdir(parents=True)
++        (staged / "face_imgs").mkdir()
++        (staged / "full_imgs" / "00000000.png").write_bytes(b"full")
++        (staged / "face_imgs" / "00000000.png").write_bytes(b"face")
++        (staged / "coords.pkl").write_bytes(b"coords")
++        return staged
++
++    def test_commit_activate_and_list(self):
++        staged = self.make_avatar("avatar_abc")
++
++        target = self.store.commit_staging(
++            staged,
++            {"avatar_id": "avatar_abc", "display_name": "Alice", "created_at": "2026-08-15T00:00:00Z"},
++        )
++        active = self.store.activate("avatar_abc", "avatar_abc")
++        items = self.store.list_avatars()
++
++        self.assertEqual(target, self.root / "avatars" / "avatar_abc")
++        self.assertFalse(staged.exists())
++        self.assertEqual(active["avatar_id"], "avatar_abc")
++        self.assertEqual(len(items), 1)
++        self.assertEqual(items[0]["display_name"], "Alice")
++        self.assertTrue(items[0]["active"])
++        persisted = json.loads((target / "metadata.json").read_text(encoding="utf-8"))
++        self.assertEqual(persisted["avatar_id"], "avatar_abc")
++
++    def test_delete_rejects_active_builtin_and_in_use(self):
++        with self.assertRaisesRegex(AvatarConflict, "built-in"):
++            self.store.delete("myavatar", set())
++
++        for avatar_id in ("avatar_active", "avatar_busy"):
++            self.store.commit_staging(
++                self.make_avatar(avatar_id),
++                {"avatar_id": avatar_id, "display_name": avatar_id},
++            )
++        self.store.activate("avatar_active", "avatar_active")
++
++        with self.assertRaisesRegex(AvatarConflict, "active"):
++            self.store.delete("avatar_active", set())
++        with self.assertRaisesRegex(AvatarConflict, "in use"):
++            self.store.delete("avatar_busy", {"avatar_busy"})
++
++    def test_commit_rejects_missing_generated_assets_and_existing_id(self):
++        incomplete = self.root / "temp" / "avatar_bad"
++        incomplete.mkdir(parents=True)
++        with self.assertRaisesRegex(AvatarInvalid, "full_imgs"):
++            self.store.commit_staging(incomplete, {"avatar_id": "avatar_bad"})
++
++        self.store.commit_staging(
++            self.make_avatar("avatar_dup"),
++            {"avatar_id": "avatar_dup", "display_name": "first"},
++        )
++        with self.assertRaisesRegex(AvatarConflict, "already exists"):
++            self.store.commit_staging(
++                self.make_avatar("avatar_dup_second"),
++                {"avatar_id": "avatar_dup", "display_name": "second"},
++            )
++
++    def test_activate_requires_live_session_to_match_avatar(self):
++        self.store.commit_staging(
++            self.make_avatar("avatar_new"),
++            {"avatar_id": "avatar_new", "display_name": "new"},
++        )
++
++        with self.assertRaisesRegex(AvatarConflict, "session avatar"):
++            self.store.activate("avatar_new", "avatar_old")
++
++        self.assertIsNone(self.store.get_active())
++
++    def test_delete_removes_an_unused_custom_avatar(self):
++        target = self.store.commit_staging(
++            self.make_avatar("avatar_unused"),
++            {"avatar_id": "avatar_unused", "display_name": "unused"},
++        )
++
++        self.store.delete("avatar_unused", set())
++
++        self.assertFalse(target.exists())
++
++
++if __name__ == "__main__":
++    unittest.main()
