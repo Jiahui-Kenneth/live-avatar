@@ -38,6 +38,108 @@ index 6839ce0..dd124b8 100644
  
      # ─── 虚拟摄像头 ───────────────────────────────────────────────────
      parser.add_argument('--audio_output_device', type=int, default=None,
+diff --git a/server/avatar_auth.py b/server/avatar_auth.py
+new file mode 100644
+index 0000000..36454ce
+--- /dev/null
++++ b/server/avatar_auth.py
+@@ -0,0 +1,96 @@
++import base64
++import hashlib
++import hmac
++import ipaddress
++import re
++import secrets
++import time
++from collections.abc import Callable, Iterable
++from urllib.parse import urlsplit
++
++from aiohttp import web
++
++
++CAPABILITY_VERSION = "v1"
++CAPABILITY_HEADER = "X-Live-Avatar-Capability"
++MAX_CAPABILITY_LIFETIME_SECONDS = 300
++NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
++LOOPBACK_V4 = ipaddress.ip_network("127.0.0.0/8")
++LOOPBACK_V6 = ipaddress.ip_address("::1")
++
++
++def _base64url(payload: bytes) -> str:
++    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
++
++
++def _message(origin: str, expires: int, nonce: str) -> bytes:
++    return f"{CAPABILITY_VERSION}\n{origin}\n{expires}\n{nonce}".encode("utf-8")
++
++
++def mint_capability(master_token: str, origin: str, expires: int, nonce: str) -> str:
++    if not master_token:
++        raise ValueError("master token is required")
++    if not origin:
++        raise ValueError("origin is required")
++    if not NONCE_RE.fullmatch(nonce):
++        raise ValueError("nonce must be base64url text")
++    expires = int(expires)
++    signature = hmac.new(
++        master_token.encode("utf-8"),
++        _message(origin, expires, nonce),
++        hashlib.sha256,
++    ).digest()
++    return f"{CAPABILITY_VERSION}.{expires}.{nonce}.{_base64url(signature)}"
++
++
++def _loopback_host(host_header: str) -> bool:
++    try:
++        hostname = urlsplit(f"//{host_header}").hostname
++        address = ipaddress.ip_address(hostname)
++    except (TypeError, ValueError):
++        return False
++    if isinstance(address, ipaddress.IPv4Address):
++        return address in LOOPBACK_V4
++    return address == LOOPBACK_V6
++
++
++class AvatarAdminGuard:
++    def __init__(
++        self,
++        master_token: str,
++        allowed_origins: Iterable[str],
++        now: Callable[[], float] = time.time,
++    ):
++        if not master_token:
++            raise ValueError("master token is required")
++        self._master_token = master_token
++        self._allowed_origins = frozenset(origin for origin in allowed_origins if origin)
++        self._now = now
++
++    def require(self, request) -> None:
++        origin = request.headers.get("Origin", "")
++        capability = request.headers.get(CAPABILITY_HEADER, "")
++        host = request.headers.get("Host", "")
++        if origin not in self._allowed_origins or not _loopback_host(host):
++            raise web.HTTPForbidden()
++
++        parts = capability.split(".")
++        if len(parts) != 4 or parts[0] != CAPABILITY_VERSION:
++            raise web.HTTPForbidden()
++        _, expires_text, nonce, supplied_signature = parts
++        if not expires_text.isdigit() or not NONCE_RE.fullmatch(nonce):
++            raise web.HTTPForbidden()
++
++        expires = int(expires_text)
++        current = int(self._now())
++        if expires < current or expires > current + MAX_CAPABILITY_LIFETIME_SECONDS:
++            raise web.HTTPForbidden()
++
++        expected = mint_capability(
++            self._master_token,
++            origin,
++            expires,
++            nonce,
++        ).rsplit(".", 1)[1]
++        if not secrets.compare_digest(supplied_signature, expected):
++            raise web.HTTPForbidden()
 diff --git a/server/avatar_image.py b/server/avatar_image.py
 new file mode 100644
 index 0000000..383b7b1
@@ -378,6 +480,87 @@ index 8037d06..38cca25 100644
      app.router.add_post("/set_audiotype", set_audiotype)
      app.router.add_post("/record", record)
      app.router.add_post("/interrupt_talk", interrupt_talk)
+diff --git a/tests/test_avatar_auth.py b/tests/test_avatar_auth.py
+new file mode 100644
+index 0000000..34648bc
+--- /dev/null
++++ b/tests/test_avatar_auth.py
+@@ -0,0 +1,75 @@
++import unittest
++
++from aiohttp import web
++
++from server.avatar_auth import AvatarAdminGuard, mint_capability
++
++
++class FakeRequest:
++    def __init__(self, capability, origin, host="127.0.0.1:8010"):
++        self.headers = {
++            "X-Live-Avatar-Capability": capability,
++            "Origin": origin,
++            "Host": host,
++        }
++
++
++class AvatarAdminGuardTest(unittest.TestCase):
++    def setUp(self):
++        self.now = 2_000_000_000
++        self.origin = "http://127.0.0.1:7860"
++        self.guard = AvatarAdminGuard("secret", {self.origin}, now=lambda: self.now)
++        self.valid = mint_capability("secret", self.origin, self.now + 300, "nonce")
++
++    def assert_forbidden(self, request):
++        with self.assertRaises(web.HTTPForbidden):
++            self.guard.require(request)
++
++    def test_accepts_exact_token_origin_and_loopback(self):
++        self.guard.require(FakeRequest(self.valid, self.origin))
++        self.guard.require(FakeRequest(self.valid, self.origin, "127.99.1.2:8010"))
++        self.guard.require(FakeRequest(self.valid, self.origin, "[::1]:8010"))
++
++    def test_rejects_wrong_secret_origin_host_and_time(self):
++        requests = (
++            FakeRequest(
++                mint_capability("wrong", self.origin, self.now + 300, "nonce"),
++                self.origin,
++            ),
++            FakeRequest(self.valid, "https://evil.example"),
++            FakeRequest(self.valid, self.origin, "192.168.1.5:8010"),
++            FakeRequest(self.valid, self.origin, "localhost:8010"),
++            FakeRequest(
++                mint_capability("secret", self.origin, self.now - 1, "nonce"),
++                self.origin,
++            ),
++            FakeRequest(
++                mint_capability("secret", self.origin, self.now + 301, "nonce"),
++                self.origin,
++            ),
++        )
++        for request in requests:
++            with self.subTest(request=request.headers):
++                self.assert_forbidden(request)
++
++    def test_rejects_missing_or_malformed_capability(self):
++        for capability in ("", "nope", "v1.bad.nonce.signature", "v2.1.nonce.sig"):
++            with self.subTest(capability=capability):
++                self.assert_forbidden(FakeRequest(capability, self.origin))
++
++    def test_signature_is_bound_to_origin_and_nonce(self):
++        other_origin = "http://localhost:7860"
++        guard = AvatarAdminGuard(
++            "secret",
++            {self.origin, other_origin},
++            now=lambda: self.now,
++        )
++        with self.assertRaises(web.HTTPForbidden):
++            guard.require(FakeRequest(self.valid, other_origin))
++        forged = self.valid.replace(".nonce.", ".changed.")
++        with self.assertRaises(web.HTTPForbidden):
++            guard.require(FakeRequest(forged, self.origin))
++
++
++if __name__ == "__main__":
++    unittest.main()
 diff --git a/tests/test_avatar_image.py b/tests/test_avatar_image.py
 new file mode 100644
 index 0000000..c8c2eed
