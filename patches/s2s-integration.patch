@@ -27879,7 +27879,7 @@ literal 0
 HcmV?d00001
 
 diff --git a/demo/index.html b/demo/index.html
-index 7ecbf2d..91aec09 100644
+index 7ecbf2d..28eadf0 100644
 --- a/demo/index.html
 +++ b/demo/index.html
 @@ -10,7 +10,7 @@
@@ -27934,7 +27934,7 @@ index 7ecbf2d..91aec09 100644
          <div class="topbar-right">
            <!-- HF login chip / sign-in pill. Populated by ui/account.js; only
                 shown when the deploy runs behind a load balancer with OAuth. -->
-@@ -141,14 +117,16 @@
+@@ -141,14 +117,15 @@
              Leave queue
            </button>
          </div>
@@ -27953,11 +27953,10 @@ index 7ecbf2d..91aec09 100644
 -          <a href="https://github.com/huggingface/speech-to-speech" target="_blank" rel="noopener">huggingface/speech-to-speech</a>
 -        </span>
 -      </footer>
-+      
      </div>
  
      <!-- Ephemeral chat bubbles anchored to the top-right -->
-@@ -270,6 +248,8 @@
+@@ -270,6 +247,8 @@
                    <option value="Uncle_Fu">Uncle_Fu</option>
                    <option value="Vivian">Vivian</option>
                  </select>
@@ -28479,6 +28478,392 @@ index 2b61792..6d75d4a 100644
 +  display: block;
 +  pointer-events: none;
 +}
+diff --git a/demo/ui/avatar-api.js b/demo/ui/avatar-api.js
+new file mode 100644
+index 0000000..4ad2e98
+--- /dev/null
++++ b/demo/ui/avatar-api.js
+@@ -0,0 +1,132 @@
++const CAPABILITY_HEADER = "X-Live-Avatar-Capability";
++
++
++export class AvatarApiError extends Error {
++  constructor(message, code = "avatar_api_error", status = 0) {
++    super(message);
++    this.name = "AvatarApiError";
++    this.code = code;
++    this.status = status;
++  }
++}
++
++
++function encodeSegment(value) {
++  return encodeURIComponent(String(value));
++}
++
++
++function abortError() {
++  const error = new Error("avatar_task_aborted");
++  error.name = "AbortError";
++  return error;
++}
++
++
++function wait(milliseconds, signal) {
++  if (signal?.aborted) return Promise.reject(abortError());
++  if (milliseconds <= 0) return Promise.resolve();
++  return new Promise((resolve, reject) => {
++    const timer = setTimeout(resolve, milliseconds);
++    signal?.addEventListener("abort", () => {
++      clearTimeout(timer);
++      reject(abortError());
++    }, { once: true });
++  });
++}
++
++
++export class AvatarApi {
++  constructor({ origin, capability, fetchImpl = fetch, refreshCapability }) {
++    this.origin = String(origin || "").replace(/\/+$/, "");
++    this.capability = String(capability || "");
++    this.fetchImpl = fetchImpl;
++    this.refreshCapability = refreshCapability;
++    if (!this.origin) throw new TypeError("avatar API origin is required");
++    if (typeof this.fetchImpl !== "function") throw new TypeError("fetch implementation is required");
++  }
++
++  async _request(path, options = {}, mayRefresh = true) {
++    const headers = {
++      ...(options.headers || {}),
++      [CAPABILITY_HEADER]: this.capability,
++    };
++    const response = await this.fetchImpl(`${this.origin}${path}`, { ...options, headers });
++    if (response.status === 403 && mayRefresh && typeof this.refreshCapability === "function") {
++      const refreshed = await this.refreshCapability();
++      this.capability = String(
++        typeof refreshed === "string"
++          ? refreshed
++          : refreshed?.avatarCapability || refreshed?.capability || "",
++      );
++      return this._request(path, options, false);
++    }
++
++    let body = null;
++    try {
++      body = await response.json();
++    } catch {
++      body = null;
++    }
++    if (!response.ok || !body || body.code !== 0) {
++      throw new AvatarApiError(
++        body?.msg || `Avatar API HTTP ${response.status}`,
++        body?.error_code || "avatar_api_error",
++        response.status,
++      );
++    }
++    return body.data ?? null;
++  }
++
++  createImageTask(imageBlob, displayName) {
++    const body = new FormData();
++    body.append("image_file", imageBlob, "crop.jpg");
++    body.append("display_name", displayName);
++    return this._request("/api/avatar/image-task", { method: "POST", body });
++  }
++
++  getTask(taskId) {
++    return this._request(`/api/avatar/task/${encodeSegment(taskId)}`);
++  }
++
++  list() {
++    return this._request("/api/avatar/list");
++  }
++
++  active() {
++    return this._request("/api/avatar/active");
++  }
++
++  activate(avatarId, sessionid) {
++    return this._request("/api/avatar/activate", {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({ avatar_id: avatarId, sessionid }),
++    });
++  }
++
++  delete(avatarId) {
++    return this._request(`/api/avatar/${encodeSegment(avatarId)}`, { method: "DELETE" });
++  }
++
++  closeSession(sessionid) {
++    return this._request(`/api/avatar/session/${encodeSegment(sessionid)}`, { method: "DELETE" });
++  }
++
++  async pollTask(taskId, { intervalMs = 1000, timeoutMs = 600000, signal } = {}) {
++    const deadline = Date.now() + timeoutMs;
++    while (Date.now() <= deadline) {
++      if (signal?.aborted) throw abortError();
++      const task = await this.getTask(taskId);
++      if (task.status === "completed") return task;
++      if (task.status === "failed") {
++        throw new AvatarApiError(
++          task.error_msg || "Avatar generation failed",
++          "avatar_generation_failed",
++        );
++      }
++      await wait(intervalMs, signal);
++    }
++    throw new AvatarApiError("Avatar generation timed out", "avatar_task_timeout");
++  }
++}
+diff --git a/demo/ui/avatar-api.test.mjs b/demo/ui/avatar-api.test.mjs
+new file mode 100644
+index 0000000..b12cba5
+--- /dev/null
++++ b/demo/ui/avatar-api.test.mjs
+@@ -0,0 +1,113 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++
++import { AvatarApi } from "./avatar-api.js";
++
++
++function jsonResponse(body, status = 200) {
++  return new Response(JSON.stringify(body), {
++    status,
++    headers: { "Content-Type": "application/json" },
++  });
++}
++
++test("create task uses exact origin, capability, and multipart body", async () => {
++  const calls = [];
++  const fetchImpl = async (url, options) => {
++    calls.push([url, options]);
++    return jsonResponse({ code: 0, data: { task_id: "task", avatar_id: "avatar" } });
++  };
++  const api = new AvatarApi({
++    origin: "http://127.0.0.1:8010/",
++    capability: "capability-one",
++    fetchImpl,
++    refreshCapability: async () => "unused",
++  });
++  const image = new Blob(["image"], { type: "image/jpeg" });
++  const result = await api.createImageTask(image, "Alice");
++  assert.deepEqual(result, { task_id: "task", avatar_id: "avatar" });
++  const [url, options] = calls[0];
++  assert.equal(url, "http://127.0.0.1:8010/api/avatar/image-task");
++  assert.equal(options.headers["X-Live-Avatar-Capability"], "capability-one");
++  assert.ok(options.body instanceof FormData);
++  assert.equal(options.body.get("display_name"), "Alice");
++  assert.equal(options.body.get("image_file").name, "crop.jpg");
++});
++
++test("one HTTP 403 refreshes capability and retries once", async () => {
++  const capabilities = [];
++  let refreshes = 0;
++  const api = new AvatarApi({
++    origin: "http://127.0.0.1:8010",
++    capability: "expired",
++    fetchImpl: async (url, options) => {
++      capabilities.push(options.headers["X-Live-Avatar-Capability"]);
++      return capabilities.length === 1
++        ? jsonResponse({ code: -1 }, 403)
++        : jsonResponse({ code: 0, data: { avatars: [] } });
++    },
++    refreshCapability: async () => {
++      refreshes += 1;
++      return "fresh";
++    },
++  });
++  assert.deepEqual(await api.list(), { avatars: [] });
++  assert.deepEqual(capabilities, ["expired", "fresh"]);
++  assert.equal(refreshes, 1);
++});
++
++test("a second HTTP 403 is terminal", async () => {
++  let calls = 0;
++  const api = new AvatarApi({
++    origin: "http://127.0.0.1:8010",
++    capability: "expired",
++    fetchImpl: async () => {
++      calls += 1;
++      return jsonResponse({ code: -1, msg: "forbidden" }, 403);
++    },
++    refreshCapability: async () => "still-bad",
++  });
++  await assert.rejects(api.active(), /forbidden/i);
++  assert.equal(calls, 2);
++});
++
++test("poll task stops on completed and exposes the result", async () => {
++  const states = [
++    { status: "running", stage: "generating", progress: 42 },
++    { status: "completed", stage: "completed", result: { avatar_id: "avatar_1" } },
++  ];
++  const api = new AvatarApi({
++    origin: "http://127.0.0.1:8010",
++    capability: "cap",
++    fetchImpl: async () => jsonResponse({ code: 0, data: states.shift() }),
++    refreshCapability: async () => "unused",
++  });
++  const result = await api.pollTask("task", { intervalMs: 0, timeoutMs: 1000 });
++  assert.equal(result.status, "completed");
++  assert.equal(result.result.avatar_id, "avatar_1");
++});
++
++test("all management methods map to stable endpoints", async () => {
++  const calls = [];
++  const api = new AvatarApi({
++    origin: "http://127.0.0.1:8010",
++    capability: "cap",
++    fetchImpl: async (url, options) => {
++      calls.push([url, options.method || "GET"]);
++      return jsonResponse({ code: 0, data: {} });
++    },
++    refreshCapability: async () => "unused",
++  });
++  await api.getTask("task-1");
++  await api.active();
++  await api.activate("avatar_1", "sid-1");
++  await api.delete("avatar_1");
++  await api.closeSession("sid-1");
++  assert.deepEqual(calls, [
++    ["http://127.0.0.1:8010/api/avatar/task/task-1", "GET"],
++    ["http://127.0.0.1:8010/api/avatar/active", "GET"],
++    ["http://127.0.0.1:8010/api/avatar/activate", "POST"],
++    ["http://127.0.0.1:8010/api/avatar/avatar_1", "DELETE"],
++    ["http://127.0.0.1:8010/api/avatar/session/sid-1", "DELETE"],
++  ]);
++});
+diff --git a/demo/ui/avatar-cropper.js b/demo/ui/avatar-cropper.js
+new file mode 100644
+index 0000000..70d0acd
+--- /dev/null
++++ b/demo/ui/avatar-cropper.js
+@@ -0,0 +1,66 @@
++const ASPECT_WIDTH = 3;
++const ASPECT_HEIGHT = 4;
++
++
++function assertDimensions(imageWidth, imageHeight) {
++  if (!(imageWidth > 0) || !(imageHeight > 0)) {
++    throw new RangeError("image dimensions must be positive");
++  }
++}
++
++
++export function initialCrop(imageWidth, imageHeight) {
++  assertDimensions(imageWidth, imageHeight);
++  const targetRatio = ASPECT_WIDTH / ASPECT_HEIGHT;
++  if (imageWidth / imageHeight >= targetRatio) {
++    const height = imageHeight;
++    const width = height * targetRatio;
++    return { x: (imageWidth - width) / 2, y: 0, width, height };
++  }
++  const width = imageWidth;
++  const height = width / targetRatio;
++  return { x: 0, y: (imageHeight - height) / 2, width, height };
++}
++
++
++export function clampCrop(crop, imageWidth, imageHeight) {
++  assertDimensions(imageWidth, imageHeight);
++  const maxWidth = Math.min(imageWidth, imageHeight * ASPECT_WIDTH / ASPECT_HEIGHT);
++  const requestedWidth = Number(crop?.width);
++  const width = Math.min(
++    maxWidth,
++    Number.isFinite(requestedWidth) && requestedWidth > 0 ? requestedWidth : maxWidth,
++  );
++  const height = width * ASPECT_HEIGHT / ASPECT_WIDTH;
++  const requestedX = Number.isFinite(Number(crop?.x)) ? Number(crop.x) : 0;
++  const requestedY = Number.isFinite(Number(crop?.y)) ? Number(crop.y) : 0;
++  const x = Math.min(Math.max(0, requestedX), imageWidth - width);
++  const y = Math.min(Math.max(0, requestedY), imageHeight - height);
++  return { x, y, width, height };
++}
++
++
++export async function exportCrop(image, crop, canvas) {
++  canvas.width = 576;
++  canvas.height = 768;
++  const context = canvas.getContext("2d");
++  if (!context) throw new Error("Canvas 2D is unavailable");
++  context.drawImage(
++    image,
++    crop.x,
++    crop.y,
++    crop.width,
++    crop.height,
++    0,
++    0,
++    576,
++    768,
++  );
++  return await new Promise((resolve, reject) => {
++    canvas.toBlob(
++      blob => blob ? resolve(blob) : reject(new Error("JPEG export failed")),
++      "image/jpeg",
++      0.92,
++    );
++  });
++}
+diff --git a/demo/ui/avatar-cropper.test.mjs b/demo/ui/avatar-cropper.test.mjs
+new file mode 100644
+index 0000000..a42b9c2
+--- /dev/null
++++ b/demo/ui/avatar-cropper.test.mjs
+@@ -0,0 +1,51 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++
++import { clampCrop, exportCrop, initialCrop } from "./avatar-cropper.js";
++
++
++test("landscape image gets centered 3:4 crop", () => {
++  assert.deepEqual(initialCrop(1200, 800), {
++    x: 300,
++    y: 0,
++    width: 600,
++    height: 800,
++  });
++});
++
++test("portrait image gets centered 3:4 crop", () => {
++  assert.deepEqual(initialCrop(600, 1200), {
++    x: 0,
++    y: 200,
++    width: 600,
++    height: 800,
++  });
++});
++
++test("crop cannot leave image bounds", () => {
++  assert.deepEqual(
++    clampCrop({ x: -20, y: 50, width: 600, height: 800 }, 1200, 800),
++    { x: 0, y: 0, width: 600, height: 800 },
++  );
++});
++
++test("export always draws a 576 by 768 JPEG", async () => {
++  const drawCalls = [];
++  const blob = new Blob(["jpeg"], { type: "image/jpeg" });
++  const canvas = {
++    width: 0,
++    height: 0,
++    getContext: () => ({ drawImage: (...args) => drawCalls.push(args) }),
++    toBlob: (callback, type, quality) => {
++      assert.equal(type, "image/jpeg");
++      assert.equal(quality, 0.92);
++      callback(blob);
++    },
++  };
++  const image = { id: "image" };
++  const crop = { x: 10, y: 20, width: 300, height: 400 };
++  assert.equal(await exportCrop(image, crop, canvas), blob);
++  assert.equal(canvas.width, 576);
++  assert.equal(canvas.height, 768);
++  assert.deepEqual(drawCalls, [[image, 10, 20, 300, 400, 0, 0, 576, 768]]);
++});
 diff --git a/demo/ui/chat.js b/demo/ui/chat.js
 index 84292ab..b54a672 100644
 --- a/demo/ui/chat.js
