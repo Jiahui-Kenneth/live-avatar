@@ -11,6 +11,39 @@ index 71700fe..4ede932 100644
  
  logger = logging.getLogger("s2s.auth")
  
+diff --git a/demo/avatar_capability.py b/demo/avatar_capability.py
+new file mode 100644
+index 0000000..531b128
+--- /dev/null
++++ b/demo/avatar_capability.py
+@@ -0,0 +1,27 @@
++import base64
++import hashlib
++import hmac
++import secrets
++import time
++
++
++CAPABILITY_LIFETIME_SECONDS = 300
++
++
++def mint_avatar_capability(
++    secret: str,
++    origin: str,
++    now: int | None = None,
++) -> tuple[str, int]:
++    if not secret:
++        raise ValueError("avatar admin secret is required")
++    if not origin:
++        raise ValueError("browser origin is required")
++    issued = int(time.time()) if now is None else int(now)
++    expires = issued + CAPABILITY_LIFETIME_SECONDS
++    nonce = secrets.token_urlsafe(18)
++    message = f"v1\n{origin}\n{expires}\n{nonce}".encode("utf-8")
++    signature = base64.urlsafe_b64encode(
++        hmac.new(secret.encode("utf-8"), message, hashlib.sha256).digest()
++    ).decode("ascii").rstrip("=")
++    return f"v1.{expires}.{nonce}.{signature}", expires
 diff --git a/demo/bg.jpg.png b/demo/bg.jpg.png
 new file mode 100644
 index 0000000000000000000000000000000000000000..7fb41c02bf2e243b6e17ee956985163944f9cea4
@@ -27879,7 +27912,7 @@ literal 0
 HcmV?d00001
 
 diff --git a/demo/index.html b/demo/index.html
-index 7ecbf2d..28eadf0 100644
+index 7ecbf2d..7f3cb51 100644
 --- a/demo/index.html
 +++ b/demo/index.html
 @@ -10,7 +10,7 @@
@@ -27897,7 +27930,7 @@ index 7ecbf2d..28eadf0 100644
    <body class="booting">
 +    <!-- Digital-human video, fixed as a full-viewport background layer -->
 +    <div id="avatar-stage" class="avatar-stage" aria-hidden="true">
-+      <iframe id="avatar-frame" src="http://127.0.0.1:8010/embed.html?v=static-avatar" allow="autoplay; microphone" frameborder="0"></iframe>
++      <iframe id="avatar-frame" src="about:blank" allow="autoplay; microphone" frameborder="0"></iframe>
 +    </div>
 +
      <div id="app">
@@ -27965,11 +27998,49 @@ index 7ecbf2d..28eadf0 100644
                </label>
              </div>
  
+@@ -309,6 +288,31 @@
+               <textarea id="instructions" rows="5" placeholder="You are a friendly voice assistant..."></textarea>
+             </label>
+ 
++            <section id="avatar-settings" class="field avatar-settings" hidden>
++              <span class="field-head">
++                数字人头像
++                <span id="avatar-current" class="field-value">未选择</span>
++              </span>
++              <div class="avatar-upload-row">
++                <input id="avatar-file" type="file" accept="image/jpeg,image/png,image/webp" />
++                <input id="avatar-name" type="text" maxlength="80" placeholder="头像名称" value="我的头像" />
++              </div>
++              <div id="avatar-crop-dialog" class="avatar-crop-dialog" hidden>
++                <canvas id="avatar-crop-canvas" width="576" height="768" aria-label="头像裁剪预览"></canvas>
++                <label class="avatar-zoom-label">
++                  缩放
++                  <input id="avatar-zoom" type="range" min="1" max="3" step="0.01" value="1" />
++                </label>
++                <div class="avatar-actions">
++                  <button id="avatar-reset" type="button" class="btn">重置</button>
++                  <button id="avatar-generate" type="button" class="btn primary">生成并切换</button>
++                </div>
++              </div>
++              <progress id="avatar-progress" max="100" value="0" hidden></progress>
++              <small id="avatar-progress-text">请选择单人正脸图片（JPEG、PNG 或 WebP，最大 10 MiB）。</small>
++              <div id="avatar-list" class="avatar-list" aria-live="polite"></div>
++            </section>
++
+             <div class="field">
+               <button id="restart-conversation" type="button" class="btn primary wide" disabled>
+                 Restart conversation with these settings
 diff --git a/demo/main.js b/demo/main.js
-index e80ad31..9a670b0 100644
+index e80ad31..c66f511 100644
 --- a/demo/main.js
 +++ b/demo/main.js
-@@ -25,8 +25,7 @@ import { Account } from "./ui/account.js";
+@@ -22,11 +22,13 @@ import { S2sRtcRealtimeClient } from "./rtc/s2s-rtc-client.js";
+ import { $, truncateError, DEBUG } from "./ui/dom.js";
+ import { ChatView } from "./ui/chat.js";
+ import { Account } from "./ui/account.js";
++import { AvatarApi } from "./ui/avatar-api.js";
++import { initialCrop, clampCrop, exportCrop } from "./ui/avatar-cropper.js";
++import { AvatarManager, IframeAvatarBridge } from "./ui/avatar-manager.js";
  
  const DEFAULT_VOICE = "Aiden";
  const DEFAULT_INSTRUCTIONS =
@@ -27979,7 +28050,7 @@ index e80ad31..9a670b0 100644
  
  // Appended to the user's instructions whenever at least one tool is enabled.
  // Stops the model from announcing capabilities ("Yes, I can search") and then
-@@ -223,8 +222,6 @@ const settingsBtn = $("#settings-btn");
+@@ -223,8 +225,6 @@ const settingsBtn = $("#settings-btn");
  /** @type {HTMLDialogElement} */
  const settingsModal = $("#settings-modal");
  
@@ -27988,7 +28059,7 @@ index e80ad31..9a670b0 100644
  /** @type {HTMLDialogElement} */
  const aboutModal = $("#about-modal");
  /** @type {HTMLButtonElement} */
-@@ -269,8 +266,44 @@ const transportHint = $("#transport-hint");
+@@ -269,8 +269,44 @@ const transportHint = $("#transport-hint");
  const gateField = $("#gate-field");
  /** @type {HTMLSelectElement} */
  const inputVoice = $("#voice");
@@ -28033,7 +28104,45 @@ index e80ad31..9a670b0 100644
  /** @type {HTMLInputElement} */
  const inputNoiseGate = $("#noise-gate");
  /** @type {HTMLElement} */
-@@ -584,8 +617,6 @@ settingsBtn.addEventListener("click", openSettings);
+@@ -289,10 +325,37 @@ const restartBtn = $("#restart-conversation");
+ /** @type {HTMLElement} */
+ const restartHint = $("#restart-hint");
+ const settingsForm = /** @type {HTMLFormElement} */ (settingsModal.querySelector("form"));
++const avatarSettings = /** @type {HTMLElement} */ ($("#avatar-settings"));
++const avatarCurrent = /** @type {HTMLElement} */ ($("#avatar-current"));
++const avatarFile = /** @type {HTMLInputElement} */ ($("#avatar-file"));
++const avatarName = /** @type {HTMLInputElement} */ ($("#avatar-name"));
++const avatarCropDialog = /** @type {HTMLElement} */ ($("#avatar-crop-dialog"));
++const avatarCropCanvas = /** @type {HTMLCanvasElement} */ ($("#avatar-crop-canvas"));
++const avatarZoom = /** @type {HTMLInputElement} */ ($("#avatar-zoom"));
++const avatarReset = /** @type {HTMLButtonElement} */ ($("#avatar-reset"));
++const avatarGenerate = /** @type {HTMLButtonElement} */ ($("#avatar-generate"));
++const avatarProgress = /** @type {HTMLProgressElement} */ ($("#avatar-progress"));
++const avatarProgressText = /** @type {HTMLElement} */ ($("#avatar-progress-text"));
++const avatarList = /** @type {HTMLElement} */ ($("#avatar-list"));
++const avatarFrame = /** @type {HTMLIFrameElement} */ ($("#avatar-frame"));
+ 
+ /** @type {AppState} */
+ let currentState = "idle";
+ let settings = loadSettings();
++/** @type {AvatarManager | null} */
++let avatarManager = null;
++/** @type {AvatarApi | null} */
++let avatarApi = null;
++/** @type {IframeAvatarBridge | null} */
++let avatarBridge = null;
++let avatarOrigin = "";
++/** @type {HTMLImageElement | null} */
++let avatarImage = null;
++/** @type {{x:number,y:number,width:number,height:number} | null} */
++let avatarCrop = null;
++/** @type {{x:number,y:number,width:number,height:number} | null} */
++let avatarBaseCrop = null;
++let avatarObjectUrl = "";
+ 
+ // ── Connection target ────────────────────────────────────────────────────────
+ // Three modes, decided by the deploy via /api/config:
+@@ -584,8 +647,6 @@ settingsBtn.addEventListener("click", openSettings);
  
  // About panel: native <dialog>, Esc closes for free; also close on the X and
  // on a click in the backdrop (a click whose target is the dialog itself).
@@ -28042,7 +28151,277 @@ index e80ad31..9a670b0 100644
  $("#about-btn-m").addEventListener("click", () => aboutModal.showModal());
  aboutClose.addEventListener("click", () => aboutModal.close());
  aboutModal.addEventListener("click", (e) => {
-@@ -1557,6 +1588,37 @@ setState("idle");
+@@ -889,6 +950,261 @@ async function execWebSearch(query) {
+   return lines.length > 1 ? lines.join("\n") : `${lines[0]}\nNo results found.`;
+ }
+ 
++function setAvatarStatus(text, error = false) {
++  avatarProgressText.textContent = text;
++  avatarProgressText.classList.toggle("error", error);
++}
++
++function pauseMicForAvatarSwitch(paused) {
++  if (!client) return;
++  const muted = paused || micMuted;
++  for (const track of micStream?.getAudioTracks?.() || []) track.enabled = !muted;
++  client.setMuted(muted);
++}
++
++function releaseAvatarObjectUrl() {
++  if (avatarObjectUrl) URL.revokeObjectURL(avatarObjectUrl);
++  avatarObjectUrl = "";
++}
++
++function clearAvatarSelection() {
++  releaseAvatarObjectUrl();
++  avatarImage = null;
++  avatarCrop = null;
++  avatarBaseCrop = null;
++  avatarFile.value = "";
++  avatarCropDialog.hidden = true;
++}
++
++function renderAvatarCrop() {
++  if (!avatarImage || !avatarCrop) return;
++  const context = avatarCropCanvas.getContext("2d");
++  if (!context) return;
++  context.clearRect(0, 0, avatarCropCanvas.width, avatarCropCanvas.height);
++  context.drawImage(
++    avatarImage,
++    avatarCrop.x,
++    avatarCrop.y,
++    avatarCrop.width,
++    avatarCrop.height,
++    0,
++    0,
++    avatarCropCanvas.width,
++    avatarCropCanvas.height,
++  );
++}
++
++async function loadAvatarImage(file) {
++  releaseAvatarObjectUrl();
++  avatarObjectUrl = URL.createObjectURL(file);
++  const image = new Image();
++  image.src = avatarObjectUrl;
++  await new Promise((resolve, reject) => {
++    image.onload = resolve;
++    image.onerror = () => reject(new Error("invalid_image: 无法读取图片"));
++  });
++  avatarImage = image;
++  avatarBaseCrop = initialCrop(image.naturalWidth, image.naturalHeight);
++  avatarCrop = { ...avatarBaseCrop };
++  avatarZoom.value = "1";
++  avatarCropDialog.hidden = false;
++  renderAvatarCrop();
++}
++
++function renderAvatarList(avatars) {
++  avatarList.replaceChildren();
++  for (const avatar of avatars) {
++    const row = document.createElement("div");
++    row.className = "avatar-list-item";
++    if (avatar.has_thumbnail) {
++      const thumbnail = document.createElement("img");
++      thumbnail.alt = "";
++      thumbnail.loading = "lazy";
++      thumbnail.src = `${avatarOrigin}/api/avatar/${encodeURIComponent(avatar.avatar_id)}/thumbnail`;
++      row.append(thumbnail);
++    } else {
++      const placeholder = document.createElement("span");
++      placeholder.className = "avatar-thumb-placeholder";
++      row.append(placeholder);
++    }
++
++    const name = document.createElement("span");
++    name.className = "avatar-list-name";
++    name.textContent = avatar.display_name || avatar.avatar_id;
++    row.append(name);
++
++    const actions = document.createElement("span");
++    actions.className = "avatar-list-actions";
++    const use = document.createElement("button");
++    use.type = "button";
++    use.className = "btn";
++    use.textContent = avatar.active ? "当前" : "切换";
++    use.disabled = !!avatar.active;
++    use.addEventListener("click", async () => {
++      if (!avatarManager) return;
++      use.disabled = true;
++      setAvatarStatus("正在切换头像…");
++      try {
++        await avatarManager.switchTo(avatar.avatar_id);
++        await avatarManager.refresh();
++        setAvatarStatus("头像已切换。");
++      } catch (error) {
++        setAvatarStatus(`切换失败：${error.message || error}`, true);
++      } finally {
++        use.disabled = false;
++      }
++    });
++    actions.append(use);
++
++    if (!avatar.built_in && !avatar.active) {
++      const remove = document.createElement("button");
++      remove.type = "button";
++      remove.className = "btn";
++      remove.textContent = "删除";
++      remove.addEventListener("click", async () => {
++        if (!avatarApi || !confirm(`删除头像“${name.textContent}”？`)) return;
++        try {
++          await avatarApi.delete(avatar.avatar_id);
++          await avatarManager?.refresh();
++          setAvatarStatus("头像已删除。");
++        } catch (error) {
++          setAvatarStatus(`删除失败：${error.message || error}`, true);
++        }
++      });
++      actions.append(remove);
++    }
++    row.append(actions);
++    avatarList.append(row);
++  }
++}
++
++async function refreshAvatarCapability() {
++  const response = await fetch("api/config", { cache: "no-store" });
++  if (!response.ok) throw new Error("无法刷新头像管理权限");
++  const config = await response.json();
++  if (!config.avatarCapability) throw new Error("头像管理权限不可用");
++  return config.avatarCapability;
++}
++
++async function setupAvatarControls(config) {
++  if (!config.avatarOrigin || !config.avatarCapability) {
++    avatarSettings.hidden = true;
++    return;
++  }
++  avatarOrigin = config.avatarOrigin.replace(/\/+$/, "");
++  avatarSettings.hidden = false;
++  avatarApi = new AvatarApi({
++    origin: avatarOrigin,
++    capability: config.avatarCapability,
++    refreshCapability: refreshAvatarCapability,
++  });
++  avatarBridge = new IframeAvatarBridge(avatarFrame, avatarOrigin);
++  avatarManager = new AvatarManager({
++    api: avatarApi,
++    iframe: avatarBridge,
++    getAppState: () => currentState,
++    setMicPaused: pauseMicForAvatarSwitch,
++    exportSelection: async () => {
++      if (!avatarImage || !avatarCrop) throw new Error("请先选择并裁剪图片");
++      return exportCrop(avatarImage, avatarCrop, document.createElement("canvas"));
++    },
++    getDisplayName: () => avatarName.value.trim() || "我的头像",
++    onFile: loadAvatarImage,
++    onProgress: task => {
++      avatarProgress.hidden = false;
++      avatarProgress.value = Number(task.progress || 0);
++      setAvatarStatus(`生成中：${task.stage || task.status}（${avatarProgress.value}%）`);
++    },
++    onList: renderAvatarList,
++    onCurrent: active => {
++      avatarCurrent.textContent = active?.avatar_id || "默认头像";
++    },
++  });
++  const catalog = await avatarManager.init();
++  avatarBridge.load(catalog.active?.avatar_id || "");
++}
++
++// Avatar crop interactions stay inside Settings and operate in source pixels.
++avatarFile.addEventListener("change", async () => {
++  const file = avatarFile.files?.[0];
++  if (!file || !avatarManager) return;
++  try {
++    await avatarManager.openFile(file);
++    setAvatarStatus("拖动图片调整位置，使用缩放滑块调整大小。");
++  } catch (error) {
++    clearAvatarSelection();
++    setAvatarStatus(error.message || String(error), true);
++  }
++});
++
++avatarZoom.addEventListener("input", () => {
++  if (!avatarImage || !avatarCrop || !avatarBaseCrop) return;
++  const centerX = avatarCrop.x + avatarCrop.width / 2;
++  const centerY = avatarCrop.y + avatarCrop.height / 2;
++  const width = avatarBaseCrop.width / Number(avatarZoom.value || 1);
++  avatarCrop = clampCrop(
++    { x: centerX - width / 2, y: centerY - width * 2 / 3, width },
++    avatarImage.naturalWidth,
++    avatarImage.naturalHeight,
++  );
++  renderAvatarCrop();
++});
++
++avatarReset.addEventListener("click", () => {
++  if (!avatarBaseCrop) return;
++  avatarCrop = { ...avatarBaseCrop };
++  avatarZoom.value = "1";
++  renderAvatarCrop();
++});
++
++let avatarDrag = null;
++avatarCropCanvas.addEventListener("pointerdown", event => {
++  if (!avatarCrop) return;
++  avatarDrag = { x: event.clientX, y: event.clientY, crop: { ...avatarCrop } };
++  avatarCropCanvas.setPointerCapture(event.pointerId);
++  avatarCropCanvas.classList.add("dragging");
++});
++avatarCropCanvas.addEventListener("pointermove", event => {
++  if (!avatarDrag || !avatarCrop || !avatarImage) return;
++  const rect = avatarCropCanvas.getBoundingClientRect();
++  const dx = (event.clientX - avatarDrag.x) * avatarDrag.crop.width / rect.width;
++  const dy = (event.clientY - avatarDrag.y) * avatarDrag.crop.height / rect.height;
++  avatarCrop = clampCrop(
++    { ...avatarDrag.crop, x: avatarDrag.crop.x - dx, y: avatarDrag.crop.y - dy },
++    avatarImage.naturalWidth,
++    avatarImage.naturalHeight,
++  );
++  renderAvatarCrop();
++});
++const endAvatarDrag = event => {
++  if (!avatarDrag) return;
++  avatarDrag = null;
++  avatarCropCanvas.classList.remove("dragging");
++  try { avatarCropCanvas.releasePointerCapture(event.pointerId); } catch {}
++};
++avatarCropCanvas.addEventListener("pointerup", endAvatarDrag);
++avatarCropCanvas.addEventListener("pointercancel", endAvatarDrag);
++
++avatarGenerate.addEventListener("click", async () => {
++  if (!avatarManager || !avatarImage) return;
++  avatarGenerate.disabled = true;
++  avatarProgress.hidden = false;
++  avatarProgress.value = 0;
++  setAvatarStatus("正在提交头像任务…");
++  try {
++    await avatarManager.generateAndSwitch();
++    avatarProgress.value = 100;
++    setAvatarStatus("头像生成并切换成功。");
++    clearAvatarSelection();
++  } catch (error) {
++    setAvatarStatus(`头像处理失败：${error.message || error}`, true);
++  } finally {
++    avatarGenerate.disabled = false;
++  }
++});
++
++settingsModal.addEventListener("close", clearAvatarSelection);
++
+ /** Learn server config (search key + connection target), then refresh the UI. */
+ async function fetchConfig() {
+   try {
+@@ -907,6 +1223,7 @@ async function fetchConfig() {
+       iceServers = Array.isArray(json.iceServers) ? json.iceServers : [];
+       // The conversation-time limiter rides on the LB being present.
+       limiterOn = lbMode;
++      await setupAvatarControls(json);
+     }
+     // Non-OK response: leave the fail-open default (allowDirect = true).
+   } catch {
+@@ -1557,6 +1874,37 @@ setState("idle");
  chat.renderEmptyState();
  initGateArc();
  void fetchConfig();
@@ -28081,22 +28460,35 @@ index e80ad31..9a670b0 100644
  // react to later permission changes (re-grant after a denial re-enables it).
  void autoStartCamera();
 diff --git a/demo/server.py b/demo/server.py
-index d758434..3ed6bd2 100644
+index d758434..5986b76 100644
 --- a/demo/server.py
 +++ b/demo/server.py
-@@ -47,9 +47,9 @@ import logging
+@@ -45,11 +45,13 @@ import asyncio
+ import json
+ import logging
  import os
++import ipaddress
  from urllib.parse import urlsplit, urlunsplit
  
 -import auth
 +from . import auth
++from .avatar_capability import mint_avatar_capability
  import httpx
 -import limiter
 +from . import limiter
  from fastapi import FastAPI, HTTPException, Request, Response
  from fastapi.responses import JSONResponse
  from fastapi.staticfiles import StaticFiles
-@@ -125,6 +125,8 @@ SERPER_URL = "https://google.serper.dev/search"
+@@ -70,6 +72,8 @@ LOAD_BALANCER_URL = os.environ.get("LOAD_BALANCER_URL", "").strip()
+ # the LB address it is NOT a secret — /api/config sends it to the client, which
+ # shows it read-only in Settings.
+ SPEECH_TO_SPEECH_URL = os.environ.get("SPEECH_TO_SPEECH_URL", "").strip()
++LIVE_AVATAR_ADMIN_TOKEN = os.environ.get("LIVE_AVATAR_ADMIN_TOKEN", "").strip()
++LIVETALKING_URL = os.environ.get("LIVETALKING_URL", "").strip()
+ if SPEECH_TO_SPEECH_URL:
+     LOAD_BALANCER_URL = ""
+ # HF injects SPACE_ID ("owner/space") into every Space runtime; it's absent
+@@ -125,6 +129,8 @@ SERPER_URL = "https://google.serper.dev/search"
  # Cap results so the tool output stays small enough to feed back to the model.
  MAX_RESULTS = 5
  HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28105,7 +28497,52 @@ index d758434..3ed6bd2 100644
  
  app = FastAPI(title="s2s-demo")
  
-@@ -531,6 +533,41 @@ async def session_end(request: Request):
+@@ -158,12 +164,33 @@ class SearchRequest(BaseModel):
+     key: str | None = None
+ 
+ 
++def _local_avatar_origin(raw: str) -> str:
++    try:
++        parsed = urlsplit(raw)
++        address = ipaddress.ip_address(parsed.hostname)
++        port = parsed.port
++    except (TypeError, ValueError):
++        return ""
++    if parsed.scheme not in ("http", "https") or not address.is_loopback or not port:
++        return ""
++    return f"{parsed.scheme}://{parsed.netloc}"
++
++
+ @app.get("/api/config")
+-def config():
++def config(request: Request):
+     """Client bootstrap: whether web search is available, whether the deploy runs
+     behind a load balancer (so the browser uses the /api/session proxy + limiter),
+     whether HF sign-in is available, and whether the user may instead set a direct
+     s2s server URL. The LB address itself is intentionally NOT included."""
++    avatar_origin = _local_avatar_origin(LIVETALKING_URL)
++    avatar_capability = ""
++    avatar_capability_expires = 0
++    if LIVE_AVATAR_ADMIN_TOKEN and avatar_origin:
++        browser_origin = f"{request.url.scheme}://{request.headers['host']}"
++        avatar_capability, avatar_capability_expires = mint_avatar_capability(
++            LIVE_AVATAR_ADMIN_TOKEN,
++            browser_origin,
++        )
+     return {
+         "search": bool(SERPER_KEY),
+         "lb": bool(LOAD_BALANCER_URL),
+@@ -177,6 +204,9 @@ def config():
+         "rtc": bool(SPEECH_TO_SPEECH_URL),
+         "iceServers": RTC_ICE_SERVERS,
+         "auth": AUTH_ENABLED,
++        "avatarOrigin": avatar_origin if avatar_capability else "",
++        "avatarCapability": avatar_capability,
++        "avatarCapabilityExpires": avatar_capability_expires,
+     }
+ 
+ 
+@@ -531,6 +561,41 @@ async def session_end(request: Request):
      return {"ok": True}
  
  
@@ -28148,7 +28585,7 @@ index d758434..3ed6bd2 100644
  # index.html at "/". The repo is public anyway, so serving the dir is fine.
  app.mount("/", StaticFiles(directory=HERE, html=True), name="static")
 diff --git a/demo/style.css b/demo/style.css
-index 2b61792..6d75d4a 100644
+index 2b61792..5de2113 100644
 --- a/demo/style.css
 +++ b/demo/style.css
 @@ -83,6 +83,8 @@ a:hover {
@@ -28454,7 +28891,7 @@ index 2b61792..6d75d4a 100644
  }
  
  /* ── Popup intro: a plain paragraph on the project + a repo link ── */
-@@ -2647,3 +2754,23 @@ body.cam-on .footer {
+@@ -2647,3 +2754,134 @@ body.cam-on .footer {
    .footer { display: none; }
    .circle { width: clamp(120px, min(50vw, 46vh), 240px); }
  }
@@ -28478,12 +28915,123 @@ index 2b61792..6d75d4a 100644
 +  display: block;
 +  pointer-events: none;
 +}
++
++/* ─── Settings: uploaded Wav2Lip avatars ─────────────────────────────── */
++.avatar-settings {
++  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.12));
++  padding-top: 18px;
++}
++
++.avatar-upload-row {
++  display: grid;
++  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
++  gap: 10px;
++}
++
++.avatar-upload-row input {
++  min-width: 0;
++}
++
++.avatar-crop-dialog {
++  display: grid;
++  gap: 10px;
++  justify-items: center;
++  padding: 12px;
++  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
++  border-radius: 14px;
++  background: rgba(0, 0, 0, 0.24);
++}
++
++.avatar-crop-dialog[hidden] {
++  display: none;
++}
++
++#avatar-crop-canvas {
++  width: min(100%, 288px);
++  aspect-ratio: 3 / 4;
++  border-radius: 12px;
++  cursor: grab;
++  touch-action: none;
++  background: #111;
++}
++
++#avatar-crop-canvas.dragging {
++  cursor: grabbing;
++}
++
++.avatar-zoom-label {
++  width: min(100%, 288px);
++  display: grid;
++  grid-template-columns: auto 1fr;
++  align-items: center;
++  gap: 10px;
++  font-size: 12px;
++  color: var(--muted, #a8a8b3);
++}
++
++.avatar-actions {
++  display: flex;
++  gap: 8px;
++  justify-content: flex-end;
++  width: min(100%, 288px);
++}
++
++#avatar-progress {
++  width: 100%;
++  accent-color: var(--accent, #7c6cff);
++}
++
++.avatar-list {
++  display: grid;
++  gap: 8px;
++}
++
++.avatar-list-item {
++  display: grid;
++  grid-template-columns: 44px minmax(0, 1fr) auto;
++  gap: 10px;
++  align-items: center;
++  padding: 8px;
++  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
++  border-radius: 12px;
++}
++
++.avatar-list-item img,
++.avatar-thumb-placeholder {
++  width: 44px;
++  height: 58px;
++  object-fit: cover;
++  border-radius: 8px;
++  background: rgba(255, 255, 255, 0.08);
++}
++
++.avatar-list-name {
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.avatar-list-actions {
++  display: flex;
++  gap: 6px;
++}
++
++.avatar-list-actions button {
++  padding: 6px 9px;
++  font-size: 11px;
++}
++
++@media (max-width: 560px) {
++  .avatar-upload-row { grid-template-columns: 1fr; }
++  .avatar-list-item { grid-template-columns: 40px minmax(0, 1fr); }
++  .avatar-list-actions { grid-column: 1 / -1; justify-content: flex-end; }
++}
 diff --git a/demo/ui/avatar-api.js b/demo/ui/avatar-api.js
 new file mode 100644
-index 0000000..4ad2e98
+index 0000000..13e49fc
 --- /dev/null
 +++ b/demo/ui/avatar-api.js
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,136 @@
 +const CAPABILITY_HEADER = "X-Live-Avatar-Capability";
 +
 +
@@ -28599,11 +29147,15 @@ index 0000000..4ad2e98
 +    return this._request(`/api/avatar/session/${encodeSegment(sessionid)}`, { method: "DELETE" });
 +  }
 +
-+  async pollTask(taskId, { intervalMs = 1000, timeoutMs = 600000, signal } = {}) {
++  async pollTask(
++    taskId,
++    { intervalMs = 1000, timeoutMs = 600000, signal, onUpdate = () => {} } = {},
++  ) {
 +    const deadline = Date.now() + timeoutMs;
 +    while (Date.now() <= deadline) {
 +      if (signal?.aborted) throw abortError();
 +      const task = await this.getTask(taskId);
++      onUpdate(task);
 +      if (task.status === "completed") return task;
 +      if (task.status === "failed") {
 +        throw new AvatarApiError(
@@ -28863,6 +29415,339 @@ index 0000000..a42b9c2
 +  assert.equal(canvas.width, 576);
 +  assert.equal(canvas.height, 768);
 +  assert.deepEqual(drawCalls, [[image, 10, 20, 300, 400, 0, 0, 576, 768]]);
++});
+diff --git a/demo/ui/avatar-manager.js b/demo/ui/avatar-manager.js
+new file mode 100644
+index 0000000..1da0535
+--- /dev/null
++++ b/demo/ui/avatar-manager.js
+@@ -0,0 +1,216 @@
++const AVATAR_ID_RE = /^[a-z0-9][a-z0-9_-]{2,63}$/;
++const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
++const SELECTED_AVATAR_KEY = "live-avatar.selected-avatar";
++
++
++function stableError(code, message = code) {
++  const error = new Error(`${code}: ${message}`);
++  error.code = code;
++  return error;
++}
++
++
++function delay(milliseconds) {
++  return new Promise(resolve => setTimeout(resolve, milliseconds));
++}
++
++
++async function defaultWaitForConversationIdle(getAppState, timeoutMs = 120000) {
++  const deadline = Date.now() + timeoutMs;
++  while (["processing", "ai-speaking"].includes(getAppState())) {
++    if (Date.now() >= deadline) throw stableError("conversation_idle_timeout");
++    await delay(100);
++  }
++}
++
++
++export class AvatarManager {
++  constructor({
++    api,
++    iframe,
++    getAppState = () => "idle",
++    waitForConversationIdle,
++    setMicPaused = () => {},
++    exportSelection,
++    getDisplayName = () => "Custom avatar",
++    onProgress = () => {},
++    onList = () => {},
++    onCurrent = () => {},
++    onFile = () => {},
++    storage = globalThis.localStorage,
++  }) {
++    this.api = api;
++    this.iframe = iframe;
++    this.getAppState = getAppState;
++    this.waitForConversationIdle = waitForConversationIdle
++      || (() => defaultWaitForConversationIdle(this.getAppState));
++    this.setMicPaused = setMicPaused;
++    this.exportSelection = exportSelection;
++    this.getDisplayName = getDisplayName;
++    this.onProgress = onProgress;
++    this.onList = onList;
++    this.onCurrent = onCurrent;
++    this.onFile = onFile;
++    this.storage = storage;
++    this.currentAvatarId = "";
++    this.currentSessionId = "";
++    this.selectedFile = null;
++  }
++
++  async init() {
++    const [activeBody, listBody] = await Promise.all([this.api.active(), this.api.list()]);
++    const active = activeBody?.active || null;
++    this.currentAvatarId = active?.avatar_id
++      || this.storage?.getItem?.(SELECTED_AVATAR_KEY)
++      || "";
++    this.onCurrent(active);
++    this.onList(listBody?.avatars || []);
++    this.iframe?.onSession?.(({ sessionid, avatarId }) => {
++      if (!avatarId || avatarId === this.currentAvatarId) this.currentSessionId = sessionid;
++    });
++    return { active, avatars: listBody?.avatars || [] };
++  }
++
++  async refresh() {
++    const [activeBody, listBody] = await Promise.all([this.api.active(), this.api.list()]);
++    this.onCurrent(activeBody?.active || null);
++    this.onList(listBody?.avatars || []);
++    return listBody?.avatars || [];
++  }
++
++  async openFile(file) {
++    if (!file?.type?.startsWith("image/")) {
++      throw stableError("image_file_type", "Choose a JPEG, PNG, or WebP image");
++    }
++    if (file.size > MAX_IMAGE_BYTES) {
++      throw stableError("image_too_large", "Image exceeds 10 MiB");
++    }
++    this.selectedFile = file;
++    await this.onFile(file);
++    return file;
++  }
++
++  async generateAndSwitch() {
++    if (typeof this.exportSelection !== "function") {
++      throw stableError("avatar_crop_missing");
++    }
++    const blob = await this.exportSelection();
++    const created = await this.api.createImageTask(blob, this.getDisplayName());
++    const completed = await this.api.pollTask(created.task_id, {
++      onUpdate: task => this.onProgress(task),
++    });
++    const avatarId = completed?.result?.avatar_id || created.avatar_id;
++    await this.switchTo(avatarId);
++    await this.refresh().catch(() => {});
++    return completed;
++  }
++
++  async switchTo(avatarId) {
++    if (!AVATAR_ID_RE.test(avatarId)) throw stableError("invalid_avatar_id");
++    const previousAvatarId = this.currentAvatarId;
++    const previousSessionId = this.currentSessionId;
++    await this.waitForConversationIdle();
++    this.setMicPaused(true);
++    try {
++      await this.iframe.stop();
++      if (previousSessionId) await this.api.closeSession(previousSessionId);
++      this.iframe.load(avatarId);
++      const newSessionId = await this.iframe.waitConnected(avatarId, 15000);
++      await this.api.activate(avatarId, newSessionId);
++      this.currentAvatarId = avatarId;
++      this.currentSessionId = newSessionId;
++      this.storage?.setItem?.(SELECTED_AVATAR_KEY, avatarId);
++      return newSessionId;
++    } catch (error) {
++      if (previousAvatarId) {
++        try {
++          this.iframe.load(previousAvatarId);
++          const rollbackSessionId = await this.iframe.waitConnected(previousAvatarId, 15000);
++          await this.api.activate(previousAvatarId, rollbackSessionId);
++          this.currentAvatarId = previousAvatarId;
++          this.currentSessionId = rollbackSessionId;
++        } catch (rollbackError) {
++          error.rollbackError = rollbackError;
++        }
++      }
++      throw error;
++    } finally {
++      this.setMicPaused(false);
++    }
++  }
++}
++
++
++export class IframeAvatarBridge {
++  constructor(iframe, origin) {
++    this.iframe = iframe;
++    this.origin = String(origin || "").replace(/\/+$/, "");
++    this.sessions = new Map();
++    this.connected = new Set();
++    this.waiters = [];
++    this.sessionListeners = [];
++    window.addEventListener("message", event => this._message(event));
++  }
++
++  _message(event) {
++    if (event.source !== this.iframe.contentWindow || !event.data) return;
++    const { type, avatarId = "", sessionid = "" } = event.data;
++    if (type === "lt-session") {
++      this.sessions.set(avatarId, sessionid);
++      for (const listener of this.sessionListeners) listener({ avatarId, sessionid });
++    }
++    if (type === "lt-state" && event.data.state === "connected") {
++      this.connected.add(avatarId);
++    }
++    for (const waiter of [...this.waiters]) waiter(event.data);
++  }
++
++  onSession(listener) {
++    this.sessionListeners.push(listener);
++    for (const [avatarId, sessionid] of this.sessions) listener({ avatarId, sessionid });
++  }
++
++  _wait(predicate, timeoutMs) {
++    return new Promise((resolve, reject) => {
++      const timer = setTimeout(() => {
++        this.waiters = this.waiters.filter(item => item !== check);
++        reject(stableError("avatar_connection_timeout"));
++      }, timeoutMs);
++      const check = data => {
++        const value = predicate(data);
++        if (value === undefined) return;
++        clearTimeout(timer);
++        this.waiters = this.waiters.filter(item => item !== check);
++        resolve(value);
++      };
++      this.waiters.push(check);
++    });
++  }
++
++  async stop(timeoutMs = 5000) {
++    if (!this.iframe.contentWindow) return;
++    const stopped = this._wait(
++      data => data.type === "lt-stopped" ? data.sessionid || "" : undefined,
++      timeoutMs,
++    );
++    this.iframe.contentWindow.postMessage({ type: "lt-stop" }, "*");
++    await stopped;
++  }
++
++  load(avatarId) {
++    this.connected.delete(avatarId);
++    this.sessions.delete(avatarId);
++    this.iframe.src = `${this.origin}/embed.html?avatar=${encodeURIComponent(avatarId)}&v=${Date.now()}`;
++  }
++
++  async waitConnected(avatarId, timeoutMs = 15000) {
++    const current = this.sessions.get(avatarId);
++    if (current && this.connected.has(avatarId)) return current;
++    return this._wait(data => {
++      if (data.avatarId !== avatarId) return undefined;
++      const sessionid = this.sessions.get(avatarId);
++      if (sessionid && this.connected.has(avatarId)) return sessionid;
++      return undefined;
++    }, timeoutMs);
++  }
++}
+diff --git a/demo/ui/avatar-manager.test.mjs b/demo/ui/avatar-manager.test.mjs
+new file mode 100644
+index 0000000..496c77e
+--- /dev/null
++++ b/demo/ui/avatar-manager.test.mjs
+@@ -0,0 +1,105 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++
++import { AvatarManager } from "./avatar-manager.js";
++
++
++test("completed generation switches only after the old session closes", async () => {
++  const events = [];
++  const api = {
++    createImageTask: async () => ({ task_id: "task", avatar_id: "new-avatar" }),
++    pollTask: async () => {
++      events.push("poll:completed");
++      return { status: "completed", result: { avatar_id: "new-avatar" } };
++    },
++    closeSession: async sid => events.push(`api:close:${sid}`),
++    activate: async (avatar, sid) => events.push(`api:activate:${avatar}:${sid}`),
++  };
++  const iframe = {
++    stop: async () => events.push("iframe:lt-stop"),
++    load: avatar => events.push(`iframe:load:${avatar}`),
++    waitConnected: async avatar => {
++      events.push(`wait:connected:${avatar === "new-avatar" ? "new-sid" : "old-sid"}`);
++      return avatar === "new-avatar" ? "new-sid" : "old-sid";
++    },
++  };
++  const manager = new AvatarManager({
++    api,
++    iframe,
++    getAppState: () => "listening",
++    waitForConversationIdle: async () => events.push("wait:conversation-idle"),
++    setMicPaused: value => events.push(`mic:${value}`),
++    exportSelection: async () => new Blob(["image"], { type: "image/jpeg" }),
++    getDisplayName: () => "Alice",
++  });
++  manager.currentAvatarId = "old-avatar";
++  manager.currentSessionId = "old-sid";
++
++  await manager.generateAndSwitch();
++  assert.deepEqual(events, [
++    "poll:completed",
++    "wait:conversation-idle",
++    "mic:true",
++    "iframe:lt-stop",
++    "api:close:old-sid",
++    "iframe:load:new-avatar",
++    "wait:connected:new-sid",
++    "api:activate:new-avatar:new-sid",
++    "mic:false",
++  ]);
++});
++
++test("failed new connection rolls back the previous avatar before unmuting", async () => {
++  const events = [];
++  let first = true;
++  const manager = new AvatarManager({
++    api: {
++      closeSession: async sid => events.push(`api:close:${sid}`),
++      activate: async (avatar, sid) => events.push(`api:activate:${avatar}:${sid}`),
++    },
++    iframe: {
++      stop: async () => events.push("iframe:lt-stop"),
++      load: avatar => events.push(`iframe:load:${avatar}`),
++      waitConnected: async avatar => {
++        if (first) {
++          first = false;
++          events.push("wait:connected:failed");
++          throw new Error("new avatar failed");
++        }
++        events.push("wait:connected:rollback-sid");
++        return "rollback-sid";
++      },
++    },
++    getAppState: () => "listening",
++    waitForConversationIdle: async () => events.push("wait:conversation-idle"),
++    setMicPaused: value => events.push(`mic:${value}`),
++  });
++  manager.currentAvatarId = "old-avatar";
++  manager.currentSessionId = "old-sid";
++
++  await assert.rejects(manager.switchTo("new-avatar"), /new avatar failed/);
++  assert.deepEqual(events, [
++    "wait:conversation-idle",
++    "mic:true",
++    "iframe:lt-stop",
++    "api:close:old-sid",
++    "iframe:load:new-avatar",
++    "wait:connected:failed",
++    "iframe:load:old-avatar",
++    "wait:connected:rollback-sid",
++    "api:activate:old-avatar:rollback-sid",
++    "mic:false",
++  ]);
++});
++
++test("file preflight rejects non-images and files over ten MiB", async () => {
++  const manager = new AvatarManager({ api: {}, iframe: {} });
++  await assert.rejects(
++    manager.openFile({ type: "text/plain", size: 4 }),
++    /image_file_type/,
++  );
++  await assert.rejects(
++    manager.openFile({ type: "image/jpeg", size: 10 * 1024 * 1024 + 1 }),
++    /image_too_large/,
++  );
 +});
 diff --git a/demo/ui/chat.js b/demo/ui/chat.js
 index 84292ab..b54a672 100644
@@ -29203,3 +30088,80 @@ index 128e0a3..463e17d 100644
                  except Empty:
                      pass
  
+diff --git a/tests/test_demo_avatar_config.py b/tests/test_demo_avatar_config.py
+new file mode 100644
+index 0000000..b32e464
+--- /dev/null
++++ b/tests/test_demo_avatar_config.py
+@@ -0,0 +1,71 @@
++import importlib
++import os
++import time
++from unittest.mock import patch
++
++from starlette.requests import Request
++from starlette.testclient import TestClient
++
++
++def load_server(environment):
++    with patch.dict(os.environ, environment, clear=False):
++        import demo.server
++
++        return importlib.reload(demo.server)
++
++
++def local_request():
++    return Request(
++        {
++            "type": "http",
++            "scheme": "http",
++            "server": ("127.0.0.1", 7860),
++            "path": "/api/config",
++            "query_string": b"",
++            "headers": [(b"host", b"127.0.0.1:7860")],
++        }
++    )
++
++
++def test_config_returns_short_lived_capability_without_master_secret():
++    server = load_server(
++        {
++            "LIVE_AVATAR_ADMIN_TOKEN": "test-token",
++            "LIVETALKING_URL": "http://127.0.0.1:8010/",
++        }
++    )
++    body = server.config(local_request())
++    assert body["avatarOrigin"] == "http://127.0.0.1:8010"
++    assert body["avatarCapability"].startswith("v1.")
++    assert body["avatarCapabilityExpires"] - int(time.time()) <= 300
++    assert body["avatarCapability"] != "test-token"
++    assert "dataRoot" not in body
++    assert "LIVE_AVATAR_ADMIN_TOKEN" not in str(body)
++
++
++def test_config_hides_avatar_controls_without_local_secret():
++    server = load_server(
++        {
++            "LIVE_AVATAR_ADMIN_TOKEN": "",
++            "LIVETALKING_URL": "http://127.0.0.1:8010",
++        }
++    )
++    body = server.config(local_request())
++    assert body["avatarOrigin"] == ""
++    assert body["avatarCapability"] == ""
++    assert body["avatarCapabilityExpires"] == 0
++
++
++def test_config_http_route_exposes_the_avatar_bootstrap():
++    server = load_server(
++        {
++            "LIVE_AVATAR_ADMIN_TOKEN": "test-token",
++            "LIVETALKING_URL": "http://127.0.0.1:8010",
++        }
++    )
++    response = TestClient(server.app).get(
++        "/api/config",
++        headers={"Host": "127.0.0.1:7860"},
++    )
++    assert response.status_code == 200
++    assert response.json()["avatarCapability"].startswith("v1.")
