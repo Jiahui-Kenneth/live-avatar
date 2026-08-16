@@ -29028,7 +29028,7 @@ index 2b61792..5de2113 100644
 +}
 diff --git a/demo/ui/avatar-api.js b/demo/ui/avatar-api.js
 new file mode 100644
-index 0000000..13e49fc
+index 0000000..b2d5fae
 --- /dev/null
 +++ b/demo/ui/avatar-api.js
 @@ -0,0 +1,136 @@
@@ -29071,7 +29071,7 @@ index 0000000..13e49fc
 +
 +
 +export class AvatarApi {
-+  constructor({ origin, capability, fetchImpl = fetch, refreshCapability }) {
++  constructor({ origin, capability, fetchImpl = (...args) => globalThis.fetch(...args), refreshCapability }) {
 +    this.origin = String(origin || "").replace(/\/+$/, "");
 +    this.capability = String(capability || "");
 +    this.fetchImpl = fetchImpl;
@@ -29170,10 +29170,10 @@ index 0000000..13e49fc
 +}
 diff --git a/demo/ui/avatar-api.test.mjs b/demo/ui/avatar-api.test.mjs
 new file mode 100644
-index 0000000..b12cba5
+index 0000000..4b70f95
 --- /dev/null
 +++ b/demo/ui/avatar-api.test.mjs
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,133 @@
 +import test from "node:test";
 +import assert from "node:assert/strict";
 +
@@ -29208,6 +29208,26 @@ index 0000000..b12cba5
 +  assert.ok(options.body instanceof FormData);
 +  assert.equal(options.body.get("display_name"), "Alice");
 +  assert.equal(options.body.get("image_file").name, "crop.jpg");
++});
++
++test("default browser fetch keeps its Window receiver", async () => {
++  const originalFetch = globalThis.fetch;
++  let receiver;
++  globalThis.fetch = async function () {
++    receiver = this;
++    if (this !== globalThis) throw new TypeError("Illegal invocation");
++    return jsonResponse({ code: 0, data: { avatars: [] } });
++  };
++  try {
++    const api = new AvatarApi({
++      origin: "http://127.0.0.1:8010",
++      capability: "cap",
++    });
++    assert.deepEqual(await api.list(), { avatars: [] });
++    assert.equal(receiver, globalThis);
++  } finally {
++    globalThis.fetch = originalFetch;
++  }
 +});
 +
 +test("one HTTP 403 refreshes capability and retries once", async () => {
