@@ -1,8 +1,48 @@
 diff --git a/app.py b/app.py
-index 7e076c2..7998215 100644
+index 7e076c2..482a8b6 100644
 --- a/app.py
 +++ b/app.py
-@@ -206,7 +206,7 @@ def main():
+@@ -53,6 +53,7 @@ from typing import Dict
+ from utils.logger import logger
+ import copy
+ import gc
++from pathlib import Path
+ from dotenv import load_dotenv
+ 
+ 
+@@ -176,12 +177,30 @@ def main():
+     appasync["opt"] = opt
+     appasync["rtc_manager"] = rtc_manager
+ 
++    from server.avatar_auth import AvatarAdminGuard
++    from server.avatar_store import AvatarStore
++    avatar_data_root = Path(os.environ.get("LIVE_AVATAR_DATA_DIR", "./data")).resolve()
++    avatar_admin_token = os.environ.get("LIVE_AVATAR_ADMIN_TOKEN", "").strip()
++    allowed_origins = {
++        origin.strip()
++        for origin in os.environ.get(
++            "LIVE_AVATAR_ALLOWED_ORIGINS",
++            "http://127.0.0.1:7860,http://localhost:7860",
++        ).split(",")
++        if origin.strip()
++    }
++    avatar_dependencies = {
++        "store": AvatarStore(avatar_data_root, {opt.avatar_id}),
++        "guard": AvatarAdminGuard(avatar_admin_token, allowed_origins),
++        "session_manager": session_manager,
++    }
++
+     appasync.on_shutdown.append(on_shutdown)
+     appasync.router.add_post("/offer", offer)
+     appasync.router.add_get("/record/{sessionid}", download_record)
+ 
+     # 注册 server/routes.py 中的通用 API 路由
+-    setup_routes(appasync)
++    setup_routes(appasync, avatar_dependencies)
+ 
+     # Configure default CORS settings.
+     cors = aiohttp_cors.setup(appasync, defaults={
+@@ -206,7 +225,7 @@ def main():
          loop = asyncio.new_event_loop()
          asyncio.set_event_loop(loop)
          loop.run_until_complete(runner.setup())
@@ -25,6 +65,22 @@ index e978d2b..78a47c4 100644
          y1 = max(0, rect[1] - pady1)
          y2 = min(image.shape[0], rect[3] + pady2)
          x1 = max(0, rect[0] - padx1)
+diff --git a/avatars/wav2lip_avatar.py b/avatars/wav2lip_avatar.py
+index e69c72e..075eb0e 100644
+--- a/avatars/wav2lip_avatar.py
++++ b/avatars/wav2lip_avatar.py
+@@ -70,7 +70,10 @@ def load_model(path):
+     return model.eval()
+ 
+ def load_avatar(avatar_id):
+-    avatar_path = f"./data/avatars/{avatar_id}"
++    data_root = os.environ.get("LIVE_AVATAR_DATA_DIR", "./data")
++    avatar_path = os.path.join(data_root, "avatars", avatar_id)
++    if not os.path.isfile(os.path.join(avatar_path, "coords.pkl")):
++        avatar_path = os.path.join("./data/avatars", avatar_id)
+     full_imgs_path = f"{avatar_path}/full_imgs" 
+     face_imgs_path = f"{avatar_path}/face_imgs" 
+     coords_path = f"{avatar_path}/coords.pkl"
 diff --git a/config.py b/config.py
 index 6839ce0..dd124b8 100644
 --- a/config.py
@@ -256,6 +312,414 @@ index 0000000..383b7b1
 +            writer.write(image_bgr)
 +    finally:
 +        writer.release()
+diff --git a/server/avatar_routes.py b/server/avatar_routes.py
+index e0d4794..e7e40da 100644
+--- a/server/avatar_routes.py
++++ b/server/avatar_routes.py
+@@ -1,136 +1,320 @@
+-import os
++import hashlib
+ import json
++import shutil
+ import uuid
++from datetime import datetime, timezone
++from pathlib import Path
++
++import cv2
+ from aiohttp import web
+-from server.task_manager import task_manager
++
++from server.avatar_image import (
++    AvatarImageError,
++    detect_faces_sfd,
++    validate_avatar_image,
++    write_still_video,
++)
++from server.avatar_store import AvatarStoreError, validate_avatar_id
++from server.task_manager import task_manager as default_task_manager
+ from utils.logger import logger
+ 
++
++STORE_KEY = web.AppKey("avatar_store")
++GUARD_KEY = web.AppKey("avatar_guard")
++TASK_MANAGER_KEY = web.AppKey("avatar_task_manager")
++SESSION_MANAGER_KEY = web.AppKey("avatar_session_manager")
++DETECT_FACES_KEY = web.AppKey("avatar_detect_faces")
++
++
+ def json_ok(data=None):
+     body = {"code": 0, "msg": "ok"}
+     if data is not None:
+         body["data"] = data
+-    return web.Response(
+-        content_type="application/json",
+-        text=json.dumps(body),
+-    )
++    return web.Response(content_type="application/json", text=json.dumps(body))
++
++
++def json_error(msg: str, code: int = -1, error_code: str | None = None):
++    body = {"code": code, "msg": str(msg)}
++    if error_code:
++        body["error_code"] = error_code
++    return web.Response(content_type="application/json", text=json.dumps(body))
+ 
+-def json_error(msg: str, code: int = -1):
+-    return web.Response(
+-        content_type="application/json",
+-        text=json.dumps({"code": code, "msg": str(msg)}),
++
++def _dependencies(request):
++    return (
++        request.app[STORE_KEY],
++        request.app[GUARD_KEY],
++        request.app[TASK_MANAGER_KEY],
++        request.app[SESSION_MANAGER_KEY],
++        request.app[DETECT_FACES_KEY],
+     )
+ 
++
++def _session_avatar_id(session) -> str:
++    options = getattr(session, "opt", None)
++    return str(getattr(options, "avatar_id", ""))
++
++
++def _in_use_avatar_ids(session_manager) -> set[str]:
++    return {
++        _session_avatar_id(session)
++        for session in session_manager.sessions.values()
++        if session is not None and _session_avatar_id(session)
++    }
++
++
++def _new_avatar_id(store) -> str:
++    date = datetime.now(timezone.utc).strftime("%Y%m%d")
++    while True:
++        avatar_id = f"avatar_{date}_{uuid.uuid4().hex[:8]}"
++        if not (store.avatars_root / avatar_id).exists():
++            return avatar_id
++
++
++async def create_image_avatar_task(request):
++    store, guard, manager, _, detect_faces = _dependencies(request)
++    guard.require(request)
++    task_root = None
++    try:
++        reader = await request.multipart()
++        payload = None
++        display_name = "Custom avatar"
++        while True:
++            part = await reader.next()
++            if part is None:
++                break
++            if part.name == "image_file":
++                payload = await part.read(decode=False)
++            elif part.name == "display_name":
++                display_name = (await part.text()).strip() or display_name
++
++        if payload is None:
++            return json_error("image_file is required", error_code="invalid_image")
++        if len(display_name) > 80:
++            return json_error("display_name is too long", error_code="invalid_display_name")
++
++        validated = validate_avatar_image(payload, detect_faces)
++        task_id = str(uuid.uuid4())
++        avatar_id = _new_avatar_id(store)
++        task_root = store.data_root / "temp" / task_id
++        generated_root = task_root / "generated"
++        video_path = task_root / "input.mp4"
++        write_still_video(validated.image_bgr, video_path)
++
++        metadata = {
++            "schema_version": 1,
++            "avatar_id": avatar_id,
++            "display_name": display_name,
++            "created_at": datetime.now(timezone.utc).isoformat(),
++            "model": "wav2lip",
++            "width": validated.image_bgr.shape[1],
++            "height": validated.image_bgr.shape[0],
++            "source_sha256": hashlib.sha256(payload).hexdigest(),
++            "app_version": "1",
++            "built_in": False,
++        }
++
++        def on_success(task):
++            staged_avatar = generated_root / avatar_id
++            if not cv2.imwrite(str(staged_avatar / "thumbnail.jpg"), validated.image_bgr):
++                raise RuntimeError("failed to write avatar thumbnail")
++            store.commit_staging(staged_avatar, metadata)
++            return {"avatar_id": avatar_id}
++
++        def on_finally(task):
++            shutil.rmtree(task_root, ignore_errors=True)
++
++        manager.add_task(
++            "wav2lip",
++            avatar_id,
++            {
++                "video_path": str(video_path),
++                "save_path": str(generated_root),
++                "img_size": 256,
++                "pads": [0, 10, 0, 0],
++                "nosmooth": False,
++                "face_det_batch_size": 16,
++            },
++            task_id=task_id,
++            stage="queued",
++            on_success=on_success,
++            on_finally=on_finally,
++        )
++        return json_ok({"task_id": task_id, "avatar_id": avatar_id})
++    except AvatarImageError as exc:
++        if task_root:
++            shutil.rmtree(task_root, ignore_errors=True)
++        return json_error(exc.message, error_code=exc.code)
++    except Exception as exc:
++        if task_root:
++            shutil.rmtree(task_root, ignore_errors=True)
++        logger.exception("create_image_avatar_task error:")
++        return json_error(str(exc), error_code="generation_setup_failed")
++
++
++async def list_avatars(request):
++    store, _, _, _, _ = _dependencies(request)
++    try:
++        return json_ok({"avatars": store.list_avatars()})
++    except AvatarStoreError as exc:
++        return json_error(str(exc))
++
++
++async def active_avatar(request):
++    store, _, _, _, _ = _dependencies(request)
++    try:
++        return json_ok({"active": store.get_active()})
++    except AvatarStoreError as exc:
++        return json_error(str(exc))
++
++
++async def avatar_thumbnail(request):
++    store, _, _, _, _ = _dependencies(request)
++    try:
++        avatar_id = validate_avatar_id(request.match_info.get("avatar_id", ""))
++        target = (store.avatars_root / avatar_id / "thumbnail.jpg").resolve()
++        if target.parent.parent != store.avatars_root or not target.is_file():
++            raise web.HTTPNotFound()
++        return web.FileResponse(target)
++    except AvatarStoreError:
++        raise web.HTTPBadRequest()
++
++
++async def activate_avatar(request):
++    store, guard, _, session_manager, _ = _dependencies(request)
++    guard.require(request)
++    try:
++        params = await request.json()
++        avatar_id = validate_avatar_id(params.get("avatar_id", ""))
++        session = session_manager.sessions.get(str(params.get("sessionid", "")))
++        if session is None:
++            return json_error("session not found")
++        active = store.activate(avatar_id, _session_avatar_id(session))
++        return json_ok({"active": active})
++    except (AvatarStoreError, ValueError, json.JSONDecodeError) as exc:
++        return json_error(str(exc))
++
++
++async def delete_avatar(request):
++    store, guard, _, session_manager, _ = _dependencies(request)
++    guard.require(request)
++    try:
++        avatar_id = validate_avatar_id(request.match_info.get("avatar_id", ""))
++        store.delete(avatar_id, _in_use_avatar_ids(session_manager))
++        return json_ok({"avatar_id": avatar_id})
++    except AvatarStoreError as exc:
++        return json_error(str(exc))
++
++
+ async def create_avatar_task(request):
+-    """
+-    POST /api/avatar/task
+-    Parameters: model, avatar_id, video_file (upload), video_path (local), ...
+-    """
++    """Legacy video avatar task endpoint."""
++    _, _, manager, _, _ = _dependencies(request)
+     try:
+-        if request.content_type == 'multipart/form-data':
++        if request.content_type == "multipart/form-data":
+             reader = await request.multipart()
+             params = {}
+             video_path = None
+-
+             while True:
+                 part = await reader.next()
+                 if part is None:
+                     break
+-
+-                if part.name == 'video_file':
+-                    filename = part.filename
+-                    temp_dir = os.path.abspath('./data/tmp')
+-                    os.makedirs(temp_dir, exist_ok=True)
+-                    video_path = os.path.join(temp_dir, f"{uuid.uuid4()}_{filename}")
+-                    with open(video_path, 'wb') as f:
++                if part.name == "video_file":
++                    temp_dir = Path("./data/tmp").resolve()
++                    temp_dir.mkdir(parents=True, exist_ok=True)
++                    video_path = temp_dir / f"{uuid.uuid4()}_{Path(part.filename).name}"
++                    with video_path.open("wb") as output:
+                         while True:
+                             chunk = await part.read_chunk()
+                             if not chunk:
+                                 break
+-                            f.write(chunk)
++                            output.write(chunk)
+                 else:
+-                    value = await part.text()
+-                    params[part.name] = value
+-
++                    params[part.name] = await part.text()
+             if video_path:
+-                params['video_path'] = video_path
++                params["video_path"] = str(video_path)
+         else:
+             params = await request.json()
+ 
+-        model_type = params.get('model')
+-        avatar_id = params.get('avatar_id')
+-
++        model_type = params.get("model")
++        avatar_id = params.get("avatar_id")
+         if not model_type or not avatar_id:
+             return json_error("model and avatar_id are required")
+-
+-        if 'video_path' not in params:
++        if "video_path" not in params:
+             return json_error("video_file or video_path is required")
+ 
+-        data_path = './data/avatars'
+-
+-        video_path = params['video_path']
+-        if not os.path.isabs(video_path):
+-            video_path = os.path.join(data_path, video_path)
+-
+-        save_path = data_path
+-
++        data_path = "./data/avatars"
++        video_path = params["video_path"]
++        if not Path(video_path).is_absolute():
++            video_path = str(Path(data_path) / video_path)
+         task_params = {
+             "video_path": video_path,
+-            "save_path": save_path,
+-            "img_size": int(params.get('img_size', 256)),
+-            "nosmooth": params.get('nosmooth', 'false').lower() == 'true' if isinstance(params.get('nosmooth'), str) else params.get('nosmooth', False),
+-            "bbox_shift": int(params.get('bbox_shift', 0)),
+-            "extra_margin": int(params.get('extra_margin', 10)),
+-            "parsing_mode": params.get('parsing_mode', 'jaw'),
+-            "version": params.get('version', 'v15'),
+-            "face_det_batch_size": int(params.get('face_det_batch_size', 16))
++            "save_path": data_path,
++            "img_size": int(params.get("img_size", 256)),
++            "nosmooth": str(params.get("nosmooth", "false")).lower() == "true",
++            "bbox_shift": int(params.get("bbox_shift", 0)),
++            "extra_margin": int(params.get("extra_margin", 10)),
++            "parsing_mode": params.get("parsing_mode", "jaw"),
++            "version": params.get("version", "v15"),
++            "face_det_batch_size": int(params.get("face_det_batch_size", 16)),
+         }
+-
+-        pads_str = params.get('pads', "0 10 0 0")
+-        if isinstance(pads_str, str):
+-            task_params['pads'] = [int(x) for x in pads_str.split()]
+-        else:
+-            task_params['pads'] = pads_str
+-
+-        task_id_input = params.get('task_id')
+-        notify_url = params.get('notifyurl')
+-
+-        task_id = task_manager.add_task(model_type, avatar_id, task_params, task_id=task_id_input, notify_url=notify_url)
+-        return json_ok(data={"task_id": task_id})
+-
+-    except Exception as e:
++        pads = params.get("pads", "0 10 0 0")
++        task_params["pads"] = [int(value) for value in pads.split()] if isinstance(pads, str) else pads
++        task_id = manager.add_task(
++            model_type,
++            avatar_id,
++            task_params,
++            task_id=params.get("task_id"),
++            notify_url=params.get("notifyurl"),
++        )
++        return json_ok({"task_id": task_id})
++    except Exception as exc:
+         logger.exception("create_avatar_task error:")
+-        return json_error(str(e))
++        return json_error(str(exc))
++
+ 
+ async def get_avatar_task_status(request):
+-    """
+-    GET /api/avatar/task/{task_id}
+-    """
+-    task_id = request.match_info.get('task_id')
+-    task = task_manager.get_task(task_id)
++    _, _, manager, _, _ = _dependencies(request)
++    task = manager.get_task(request.match_info.get("task_id"))
+     if not task:
+         return json_error("Task not found", code=404)
++    return json_ok(task.to_dict())
+ 
+-    return json_ok(data=task.to_dict())
+ 
+ async def list_avatar_tasks(request):
+-    """
+-    GET /api/avatar/tasks
+-    """
+-    tasks = task_manager.list_tasks()
+-    return json_ok(data={"tasks": tasks})
++    _, _, manager, _, _ = _dependencies(request)
++    return json_ok({"tasks": manager.list_tasks()})
++
+ 
+ async def delete_avatar_task(request):
+-    """
+-    DELETE /api/avatar/task/{task_id}
+-    """
+-    task_id = request.match_info.get('task_id')
+-    success, msg = task_manager.delete_task(task_id)
++    _, _, manager, _, _ = _dependencies(request)
++    success, message = manager.delete_task(request.match_info.get("task_id"))
+     if not success:
+-        return json_error(msg)
+-    return json_ok(data={"msg": msg})
++        return json_error(message)
++    return json_ok({"msg": message})
++
++
++def setup_avatar_routes(
++    app,
++    *,
++    store,
++    guard,
++    session_manager,
++    task_manager=default_task_manager,
++    detect_faces=detect_faces_sfd,
++):
++    app[STORE_KEY] = store
++    app[GUARD_KEY] = guard
++    app[TASK_MANAGER_KEY] = task_manager
++    app[SESSION_MANAGER_KEY] = session_manager
++    app[DETECT_FACES_KEY] = detect_faces
+ 
+-def setup_avatar_routes(app):
++    app.router.add_post("/api/avatar/image-task", create_image_avatar_task)
++    app.router.add_get("/api/avatar/list", list_avatars)
++    app.router.add_get("/api/avatar/active", active_avatar)
++    app.router.add_post("/api/avatar/activate", activate_avatar)
+     app.router.add_post("/api/avatar/task", create_avatar_task)
+     app.router.add_get("/api/avatar/task/{task_id}", get_avatar_task_status)
+     app.router.add_delete("/api/avatar/task/{task_id}", delete_avatar_task)
+     app.router.add_get("/api/avatar/tasks", list_avatar_tasks)
++    app.router.add_get("/api/avatar/{avatar_id}/thumbnail", avatar_thumbnail)
++    app.router.add_delete("/api/avatar/{avatar_id}", delete_avatar)
 diff --git a/server/avatar_store.py b/server/avatar_store.py
 new file mode 100644
 index 0000000..fe65c57
@@ -407,7 +871,7 @@ index 0000000..fe65c57
 +                raise AvatarNotFound("avatar not found")
 +            shutil.rmtree(target)
 diff --git a/server/routes.py b/server/routes.py
-index 8037d06..38cca25 100644
+index 8037d06..59c326a 100644
 --- a/server/routes.py
 +++ b/server/routes.py
 @@ -107,6 +107,61 @@ async def humanaudio(request):
@@ -472,7 +936,13 @@ index 8037d06..38cca25 100644
  async def set_audiotype(request):
      """设置自定义状态（动作编排）"""
      try:
-@@ -246,6 +301,7 @@ def setup_routes(app):
+@@ -241,11 +296,12 @@ async def index(request):
+     raise web.HTTPFound(f'/{pagename}')
+ 
+ 
+-def setup_routes(app):
++def setup_routes(app, avatar_dependencies):
+     """注册所有路由到 aiohttp app"""
      app.router.add_get("/", index)
      app.router.add_post("/human", human)
      app.router.add_post("/humanaudio", humanaudio)
@@ -480,6 +950,118 @@ index 8037d06..38cca25 100644
      app.router.add_post("/set_audiotype", set_audiotype)
      app.router.add_post("/record", record)
      app.router.add_post("/interrupt_talk", interrupt_talk)
+@@ -267,6 +323,6 @@ def setup_routes(app):
+         logger.warning(f"[ASR] Failed to register ASR endpoint: {e}")
+ 
+     # 注册 avatar 生成相关的路由
+-    setup_avatar_routes(app)
++    setup_avatar_routes(app, **avatar_dependencies)
+ 
+     app.router.add_static('/', path='web')
+diff --git a/server/task_manager.py b/server/task_manager.py
+index 585a6a5..05a8db4 100644
+--- a/server/task_manager.py
++++ b/server/task_manager.py
+@@ -9,15 +9,20 @@ from concurrent.futures import ThreadPoolExecutor
+ from utils.logger import logger
+ 
+ class AvatarTask:
+-    def __init__(self, task_id, model_type, avatar_id, params, notify_url=None):
++    def __init__(self, task_id, model_type, avatar_id, params, notify_url=None,
++                 stage="queued", on_success=None, on_finally=None):
+         self.task_id = task_id
+         self.model_type = model_type
+         self.avatar_id = avatar_id
+         self.params = params
+         self.status = "pending"  # pending, running, completed, failed
++        self.stage = stage
+         self.progress = 0
+         self.error_msg = ""
++        self.result = {}
+         self.notify_url = notify_url
++        self.on_success = on_success
++        self.on_finally = on_finally
+         self.start_time = time.time()
+         self.end_time = None
+ 
+@@ -27,8 +32,10 @@ class AvatarTask:
+             "model_type": self.model_type,
+             "avatar_id": self.avatar_id,
+             "status": self.status,
++            "stage": self.stage,
+             "progress": self.progress,
+             "error_msg": self.error_msg,
++            "result": self.result,
+             "notify_url": self.notify_url,
+             "start_time": self.start_time,
+             "end_time": self.end_time,
+@@ -41,11 +48,21 @@ class TaskManager:
+         self.tasks = {}
+         self.lock = threading.Lock()
+ 
+-    def add_task(self, model_type, avatar_id, params, task_id=None, notify_url=None):
++    def add_task(self, model_type, avatar_id, params, task_id=None, notify_url=None,
++                 stage="queued", on_success=None, on_finally=None):
+         if task_id is None:
+             task_id = str(uuid.uuid4())
+ 
+-        task = AvatarTask(task_id, model_type, avatar_id, params, notify_url)
++        task = AvatarTask(
++            task_id,
++            model_type,
++            avatar_id,
++            params,
++            notify_url,
++            stage=stage,
++            on_success=on_success,
++            on_finally=on_finally,
++        )
+         with self.lock:
+             self.tasks[task_id] = task
+ 
+@@ -79,12 +96,14 @@ class TaskManager:
+             return
+ 
+         task.status = "running"
++        task.stage = "generating"
+         self._notify(task)
+         logger.info(f"Starting task {task_id} for model {task.model_type}, avatar {task.avatar_id}")
+ 
+         try:
+             def progress_callback(p):
+-                task.progress = p
++                task.progress = int(p)
++                task.stage = "generating"
+ 
+             if task.model_type == "musetalk":
+                 from avatars.musetalk.genavatar import generate_avatar
+@@ -113,17 +132,26 @@ class TaskManager:
+             else:
+                 raise ValueError(f"Unsupported model type: {task.model_type}")
+ 
++            if task.on_success:
++                task.result = task.on_success(task) or {}
+             task.status = "completed"
++            task.stage = "completed"
+             task.progress = 100
+             self._notify(task)
+             logger.info(f"Task {task_id} completed successfully")
+         except Exception as e:
+             task.status = "failed"
++            task.stage = "failed"
+             task.error_msg = str(e)
+             self._notify(task)
+             logger.error(f"Task {task_id} failed: {e}")
+         finally:
+             task.end_time = time.time()
++            if task.on_finally:
++                try:
++                    task.on_finally(task)
++                except Exception as e:
++                    logger.error(f"Task {task_id} cleanup failed: {e}")
+ 
+     def _notify(self, task):
+         if not task.notify_url:
 diff --git a/tests/test_avatar_auth.py b/tests/test_avatar_auth.py
 new file mode 100644
 index 0000000..34648bc
@@ -657,6 +1239,235 @@ index 0000000..c8c2eed
 +            finally:
 +                capture.release()
 +            self.assertEqual(decoded, 25)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_avatar_routes.py b/tests/test_avatar_routes.py
+new file mode 100644
+index 0000000..90ebcd8
+--- /dev/null
++++ b/tests/test_avatar_routes.py
+@@ -0,0 +1,223 @@
++import tempfile
++import unittest
++from pathlib import Path
++from types import SimpleNamespace
++from unittest.mock import patch
++
++import cv2
++import numpy as np
++from aiohttp import FormData, web
++from aiohttp.test_utils import TestClient, TestServer
++
++from server.avatar_auth import AvatarAdminGuard, mint_capability
++from server.avatar_routes import setup_avatar_routes
++from server.avatar_store import AvatarStore
++from server.task_manager import TaskManager
++
++
++ORIGIN = "http://127.0.0.1:7860"
++NOW = 2_000_000_000
++CAPABILITY = mint_capability("secret", ORIGIN, NOW + 300, "route-test")
++ADMIN_HEADERS = {
++    "Origin": ORIGIN,
++    "X-Live-Avatar-Capability": CAPABILITY,
++}
++
++
++class FakeExecutor:
++    def __init__(self):
++        self.submissions = []
++
++    def submit(self, callable_, *args):
++        self.submissions.append((callable_, args))
++
++
++class FakeTaskManager:
++    def __init__(self):
++        self.calls = []
++        self.tasks = {}
++
++    def add_task(self, model, avatar_id, params, **kwargs):
++        self.calls.append((model, avatar_id, params, kwargs))
++        task_id = kwargs["task_id"]
++        self.tasks[task_id] = SimpleNamespace(
++            to_dict=lambda: {
++                "task_id": task_id,
++                "avatar_id": avatar_id,
++                "stage": "queued",
++                "status": "pending",
++            }
++        )
++        return task_id
++
++    def get_task(self, task_id):
++        return self.tasks.get(task_id)
++
++    def list_tasks(self):
++        return [task.to_dict() for task in self.tasks.values()]
++
++    def delete_task(self, task_id):
++        return False, "not supported"
++
++
++class FakeSessionManager:
++    def __init__(self):
++        self.sessions = {}
++
++
++class AvatarTaskManagerTest(unittest.TestCase):
++    def test_serializes_stage_result_and_runs_callbacks(self):
++        manager = TaskManager(max_workers=1)
++        manager.executor.shutdown(wait=True)
++        manager.executor = FakeExecutor()
++        finalized = []
++
++        def generated(**kwargs):
++            kwargs["progress_callback"](42)
++
++        task_id = manager.add_task(
++            "wav2lip",
++            "avatar_20260815_1234abcd",
++            {"video_path": "input.mp4"},
++            stage="queued",
++            on_success=lambda task: {"avatar_id": task.avatar_id},
++            on_finally=lambda task: finalized.append(task.task_id),
++        )
++        task = manager.get_task(task_id)
++        self.assertEqual(task.to_dict()["stage"], "queued")
++        self.assertNotIn("on_success", task.to_dict())
++        with patch("avatars.wav2lip.genavatar.generate_avatar", generated):
++            manager._run_task(task_id)
++        body = task.to_dict()
++        self.assertEqual(body["status"], "completed")
++        self.assertEqual(body["stage"], "completed")
++        self.assertEqual(body["result"], {"avatar_id": task.avatar_id})
++        self.assertEqual(finalized, [task_id])
++
++
++class AvatarRoutesTest(unittest.IsolatedAsyncioTestCase):
++    async def asyncSetUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.data_root = Path(self.temp.name)
++        self.store = AvatarStore(self.data_root, {"myavatar"})
++        self.guard = AvatarAdminGuard("secret", {ORIGIN}, now=lambda: NOW)
++        self.tasks = FakeTaskManager()
++        self.sessions = FakeSessionManager()
++        self.app = web.Application(client_max_size=12 * 1024 * 1024)
++        setup_avatar_routes(
++            self.app,
++            store=self.store,
++            guard=self.guard,
++            task_manager=self.tasks,
++            session_manager=self.sessions,
++            detect_faces=lambda image: [(160, 120, 416, 500, 0.99)],
++        )
++        self.client = TestClient(TestServer(self.app))
++        await self.client.start_server()
++
++    async def asyncTearDown(self):
++        await self.client.close()
++        self.temp.cleanup()
++
++    @staticmethod
++    def encoded(width=576, height=768):
++        image = np.zeros((height, width, 3), dtype=np.uint8)
++        ok, data = cv2.imencode(".jpg", image)
++        if not ok:
++            raise RuntimeError("test JPEG encoding failed")
++        return data.tobytes()
++
++    def stage_avatar(self, avatar_id, display_name="Avatar"):
++        staged = self.data_root / "staging" / avatar_id
++        (staged / "full_imgs").mkdir(parents=True)
++        (staged / "face_imgs").mkdir()
++        (staged / "coords.pkl").write_bytes(b"coords")
++        (staged / "thumbnail.jpg").write_bytes(self.encoded())
++        self.store.commit_staging(
++            staged,
++            {
++                "avatar_id": avatar_id,
++                "display_name": display_name,
++                "built_in": avatar_id == "myavatar",
++            },
++        )
++
++    async def post_image(self, payload=None, headers=ADMIN_HEADERS):
++        form = FormData()
++        form.add_field(
++            "image_file",
++            payload if payload is not None else self.encoded(),
++            filename="crop.jpg",
++            content_type="image/jpeg",
++        )
++        form.add_field("display_name", "Alice")
++        return await self.client.post("/api/avatar/image-task", data=form, headers=headers)
++
++    async def test_create_image_task_returns_ids_and_staged_video(self):
++        response = await self.post_image()
++        body = await response.json()
++        self.assertEqual(body["code"], 0)
++        self.assertRegex(body["data"]["avatar_id"], r"^avatar_[0-9]{8}_[a-f0-9]{8}$")
++        self.assertRegex(body["data"]["task_id"], r"^[a-f0-9-]{36}$")
++        model, avatar_id, params, kwargs = self.tasks.calls[0]
++        self.assertEqual(model, "wav2lip")
++        self.assertEqual(avatar_id, body["data"]["avatar_id"])
++        self.assertTrue(Path(params["video_path"]).is_file())
++        self.assertEqual(Path(params["save_path"]).name, "generated")
++        self.assertEqual(kwargs["stage"], "queued")
++
++    async def test_anonymous_upload_is_rejected(self):
++        response = await self.post_image(headers={"Origin": ORIGIN})
++        self.assertEqual(response.status, 403)
++        self.assertEqual(self.tasks.calls, [])
++
++    async def test_invalid_image_returns_stable_code(self):
++        response = await self.post_image(payload=b"not-an-image")
++        body = await response.json()
++        self.assertEqual(body["code"], -1)
++        self.assertEqual(body["error_code"], "invalid_image")
++
++    async def test_list_active_and_thumbnail(self):
++        self.stage_avatar("avatar_abc", "Alice")
++        self.sessions.sessions["sid-new"] = SimpleNamespace(
++            opt=SimpleNamespace(avatar_id="avatar_abc")
++        )
++        activated = await self.client.post(
++            "/api/avatar/activate",
++            json={"avatar_id": "avatar_abc", "sessionid": "sid-new"},
++            headers=ADMIN_HEADERS,
++        )
++        self.assertEqual((await activated.json())["code"], 0)
++        listed = await (await self.client.get("/api/avatar/list")).json()
++        active = await (await self.client.get("/api/avatar/active")).json()
++        self.assertEqual(listed["data"]["avatars"][0]["display_name"], "Alice")
++        self.assertEqual(active["data"]["active"]["avatar_id"], "avatar_abc")
++        thumbnail = await self.client.get("/api/avatar/avatar_abc/thumbnail")
++        self.assertEqual(thumbnail.status, 200)
++        self.assertTrue((await thumbnail.read()).startswith(b"\xff\xd8"))
++
++    async def test_activate_requires_matching_live_session(self):
++        self.stage_avatar("avatar_abc")
++        self.sessions.sessions["sid-old"] = SimpleNamespace(
++            opt=SimpleNamespace(avatar_id="myavatar")
++        )
++        response = await self.client.post(
++            "/api/avatar/activate",
++            json={"avatar_id": "avatar_abc", "sessionid": "sid-old"},
++            headers=ADMIN_HEADERS,
++        )
++        self.assertEqual((await response.json())["code"], -1)
++
++    async def test_thumbnail_traversal_and_protected_delete_are_rejected(self):
++        traversal = await self.client.get("/api/avatar/%2e%2e/thumbnail")
++        self.assertIn(traversal.status, (400, 404))
++        self.stage_avatar("myavatar")
++        response = await self.client.delete(
++            "/api/avatar/myavatar",
++            headers=ADMIN_HEADERS,
++        )
++        self.assertEqual((await response.json())["code"], -1)
 +
 +
 +if __name__ == "__main__":
