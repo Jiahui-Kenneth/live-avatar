@@ -94,6 +94,39 @@
                                               ]
                        },
                        {
+                           "id":  "torch-cu128-wheel",
+                           "install_kind":  "python_wheel",
+                           "version":  "2.11.0+cu128",
+                           "filename":  "torch-2.11.0+cu128-cp311-cp311-win_amd64.whl",
+                           "urls":  [
+                                        "https://download.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp311-cp311-win_amd64.whl"
+                                    ],
+                           "bytes":  2753148611,
+                           "sha256":  "90ef0c2454e5296a9fb021ddd42252e4ce1abe2c0a4988a173ef90a6cded0bf5"
+                       },
+                       {
+                           "id":  "torchaudio-cu128-wheel",
+                           "install_kind":  "python_wheel",
+                           "version":  "2.11.0+cu128",
+                           "filename":  "torchaudio-2.11.0+cu128-cp311-cp311-win_amd64.whl",
+                           "urls":  [
+                                        "https://download.pytorch.org/whl/cu128/torchaudio-2.11.0%2Bcu128-cp311-cp311-win_amd64.whl"
+                                    ],
+                           "bytes":  1671592,
+                           "sha256":  "0f2995101f526a2220dc348d35b153f327ed59b247fa249adddc4c478cece566"
+                       },
+                       {
+                           "id":  "torchvision-cu128-wheel",
+                           "install_kind":  "python_wheel",
+                           "version":  "0.26.0+cu128",
+                           "filename":  "torchvision-0.26.0+cu128-cp311-cp311-win_amd64.whl",
+                           "urls":  [
+                                        "https://download.pytorch.org/whl/cu128/torchvision-0.26.0%2Bcu128-cp311-cp311-win_amd64.whl"
+                                    ],
+                           "bytes":  9313819,
+                           "sha256":  "d26091b15cd6e3c74c148d9b68c9a901ad6fb9b0f66fa3ea3ab09f04132a07d3"
+                       },
+                       {
                            "id":  "python-wheelhouse",
                            "install_kind":  "wheelhouse",
                            "version":  "0.1.0",
@@ -101,8 +134,8 @@
                            "urls":  [
                                         "https://github.com/HeiXia2077/live-avatar/releases/download/v0.1.0/python-wheelhouse-live-avatar-v0.1.0.zip"
                                     ],
-                           "bytes":  3215123902,
-                           "sha256":  "85416be7a6203ec5caf5282e1440893a1e0d59c657ccee80e0c40ad818599191"
+                           "bytes":  457470408,
+                           "sha256":  "73ee9e604aac6247e378687676fc2f8b2b44427a6c6dbc7b2c4599e1e0133c0c"
                        }
                    ]
 }

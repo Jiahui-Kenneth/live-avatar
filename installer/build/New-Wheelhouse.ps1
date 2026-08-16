@@ -51,9 +51,16 @@ try {
     })
     $encoding = New-Object Text.UTF8Encoding($false)
     [IO.File]::WriteAllText([IO.Path]::GetFullPath($LockPath), ($lock | ConvertTo-Json -Depth 20), $encoding)
+    foreach ($file in $torchFiles) { Remove-Item -LiteralPath $file.FullName -Force }
+    $bundledWheelCount = @(Get-ChildItem -LiteralPath $stage -Filter '*.whl' -File).Count
     $archive = Join-Path $DistDir "python-wheelhouse-live-avatar-v$Version.zip"
     if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
     [IO.Compression.ZipFile]::CreateFromDirectory($stage, $archive, [IO.Compression.CompressionLevel]::Optimal, $false)
-    [pscustomobject]@{archive=$archive;wheel_count=$wheelFiles.Count;bytes=(Get-Item $archive).Length} | ConvertTo-Json -Compress
+    [pscustomobject]@{
+        archive=$archive
+        wheel_count=$bundledWheelCount
+        external_wheel_count=$torchFiles.Count
+        bytes=(Get-Item $archive).Length
+    } | ConvertTo-Json -Compress
 }
 finally { Remove-SafeWheelTree $stage }

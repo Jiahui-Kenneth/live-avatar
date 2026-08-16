@@ -17,14 +17,14 @@
 
 | 显存 | 默认选择 | 模式 | GGUF | 首次安装下载总量* |
 |---:|---|---|---:|---:|
-| 6 GiB 以下 | 4B | CPU 慢速 | 2.52 GiB | 6.67 GiB |
-| 8 GiB | 4B | 混合卸载 | 2.52 GiB | 6.67 GiB |
-| 12 GiB | 4B | 全 GPU | 2.52 GiB | 6.67 GiB |
-| 16–24 GiB | 9B | 全 GPU | 5.24 GiB | 9.39 GiB |
-| 28–30 GiB | 27B | 全 GPU | 15.40 GiB | 19.56 GiB |
-| 32 GiB 及以上 | 35B-A3B | 全 GPU | 19.72 GiB | 23.87 GiB |
+| 6 GiB 以下 | 4B | CPU 慢速 | 2.52 GiB | 6.68 GiB |
+| 8 GiB | 4B | 混合卸载 | 2.52 GiB | 6.68 GiB |
+| 12 GiB | 4B | 全 GPU | 2.52 GiB | 6.68 GiB |
+| 16–24 GiB | 9B | 全 GPU | 5.24 GiB | 9.40 GiB |
+| 28–30 GiB | 27B | 全 GPU | 15.40 GiB | 19.57 GiB |
+| 32 GiB 及以上 | 35B-A3B | 全 GPU | 19.72 GiB | 23.88 GiB |
 
-\* 总量包含 4,457,570,185 字节的 Python、llama.cpp、Wav2Lip、默认头像、预打补丁源码和离线 wheelhouse。首次启动还会下载 faster-whisper base 与 Qwen3-TTS 语音模型，合计约 4.4 GiB，保存在数据目录的 `cache\huggingface`。
+\* 总量包含 4,464,050,713 字节的 Python、llama.cpp、Wav2Lip、默认头像、预打补丁源码和锁定的 Python wheels。首次启动还会下载 faster-whisper base 与 Qwen3-TTS 语音模型，合计约 4.4 GiB，保存在数据目录的 `cache\huggingface`。
 
 安装器允许选择“更快”档；高质量档只有在完整栈显存预算安全时才可选。24 GiB 机器默认保持 9B，27B 全 GPU 会显示为不安全。
 
@@ -45,7 +45,9 @@
 
 “Official”按清单顺序使用官方 HTTPS 地址。“China”会优先清单中存在的 `hf-mirror`、阿里云或 Gitee 地址；v0.1.0 的正式发布清单目前只锁定官方 GitHub、Hugging Face、Python 和 Google Drive 地址，因此选择 China 不保证存在替代镜像。
 
-3.2 GiB wheelhouse 已包含两套环境所需的 148 个锁定 wheel，目标电脑不访问 PyPI，也不需要 Git 或编译器。但是全新安装仍要下载发布载荷、GGUF、Wav2Lip 资源，并在首次启动下载语音模型；它不是完全离线安装包。
+两套环境共使用 148 个锁定 wheel：145 个放在 457,470,408 字节的 GitHub Release wheelhouse 中；`torch`、`torchvision`、`torchaudio` 三个 CUDA 12.8 wheel 直接从 PyTorch 官方地址下载。安装器会先逐个核对固定字节数与 SHA-256，再合并到本地 wheel 目录，随后使用 `--no-index` 安装，因此目标电脑不访问 PyPI，也不需要 Git 或编译器。这样每个 GitHub Release 附件都低于其 2 GiB 单文件限制。
+
+但是全新安装仍要下载发布载荷、GGUF、Wav2Lip 资源，并在首次启动下载语音模型；它不是完全离线安装包。
 
 ## 日常命令
 
@@ -87,7 +89,7 @@ Windows“已安装的应用”中卸载 Live Avatar。模型、自定义头像�
 
 | 文件 | 字节 | SHA-256 |
 |---|---:|---|
-| `LiveAvatar-Setup-0.1.0.exe` | 2,129,681 | `af9f1120eb8d054616f0c8fcf9116805a6998f2b835c80007ab8192cf66f374c` |
-| `python-wheelhouse-live-avatar-v0.1.0.zip` | 3,215,123,902 | `85416be7a6203ec5caf5282e1440893a1e0d59c657ccee80e0c40ad818599191` |
+| `LiveAvatar-Setup-0.1.0.exe` | 2,129,999 | `acf109ab65892a30636a03d65fa2f734cc2ea17f95be232e13114a0eabb846e0` |
+| `python-wheelhouse-live-avatar-v0.1.0.zip` | 457,470,408 | `73ee9e604aac6247e378687676fc2f8b2b44427a6c6dbc7b2c4599e1e0133c0c` |
 
 源码包、完整 release manifest 以及剩余发布文件的字节数和 SHA-256 以 `installer/manifests/components-v0.1.0.json` 为准。正式上传 GitHub Release 后，应再次核对下载文件与本表。

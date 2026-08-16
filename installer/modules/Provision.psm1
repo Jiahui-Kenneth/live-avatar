@@ -165,7 +165,7 @@ function Install-ZipComponent {
 }
 
 function Install-Wheelhouse {
-    param($Component, $Layout, [string]$ArtifactPath, [string]$WheelLockPath, [scriptblock]$ProcessAction)
+    param($Component, $Layout, [string]$ArtifactPath, [string]$DownloadRoot, [string]$WheelLockPath, [scriptblock]$ProcessAction)
     if ([string]::IsNullOrWhiteSpace($WheelLockPath) -or -not (Test-Path -LiteralPath $WheelLockPath -PathType Leaf)) {
         throw 'wheelhouse lock is required'
     }
@@ -181,6 +181,22 @@ function Install-Wheelhouse {
     Expand-SafeZip $ArtifactPath $wheelRoot
     try {
         $lock = Get-Content -LiteralPath $WheelLockPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($wheel in @($lock.wheels)) {
+            $filename = [string]$wheel.filename
+            if ([IO.Path]::GetFileName($filename) -ne $filename -or $filename -notmatch '\.whl$') {
+                throw "unsafe wheel lock filename: $filename"
+            }
+            $destination = Join-Path $wheelRoot $filename
+            if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) {
+                $external = Join-Path ([IO.Path]::GetFullPath($DownloadRoot)) $filename
+                if (-not (Test-Path -LiteralPath $external -PathType Leaf)) { throw "locked wheel is missing: $filename" }
+                Copy-Item -LiteralPath $external -Destination $destination
+            }
+            $file = Get-Item -LiteralPath $destination
+            if ([int64]$file.Length -ne [int64]$wheel.bytes) { throw "wheel size mismatch: $filename" }
+            $hash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($hash -ne [string]$wheel.sha256) { throw "wheel hash mismatch: $filename" }
+        }
         foreach ($name in @('s2s','livetalking')) {
             $sourceRoot = if ($name -eq 's2s') { Join-Path $Layout.version_root 'speech-to-speech' } else { Join-Path $Layout.version_root 'LiveTalking' }
             if (-not (Test-Path -LiteralPath $sourceRoot -PathType Container)) { throw "source bundle must be installed before wheelhouse: $name" }
@@ -252,7 +268,8 @@ function Install-LiveAvatarComponent {
     switch ($kind) {
         'python_exe' { return Install-PythonRuntime $Component $Layout $artifactPath $ProcessAction }
         { $_ -in @('zip','zip_overlay','source_bundle') } { return Install-ZipComponent $Component $Layout $artifactPath -Repair:$Repair }
-        'wheelhouse' { return Install-Wheelhouse $Component $Layout $artifactPath $WheelLockPath $ProcessAction }
+        'python_wheel' { return $artifactPath }
+        'wheelhouse' { return Install-Wheelhouse $Component $Layout $artifactPath $DownloadRoot $WheelLockPath $ProcessAction }
         'gguf' {
             $bytes = [IO.File]::ReadAllBytes($artifactPath)
             if ($bytes.Length -lt 4 -or [Text.Encoding]::ASCII.GetString($bytes,0,4) -ne 'GGUF') { throw 'model file does not have a GGUF header' }
@@ -291,11 +308,13 @@ function Get-LiveAvatarInstallOrder {
             'livetalking-bundle' { 31 }
             'wav2lip-model' { 40 }
             'default-avatar' { 41 }
+            { $_ -like '*-cu128-wheel' } { 49 }
             'python-wheelhouse' { 50 }
             default {
                 switch ([string]$component.install_kind) {
                     'python_exe' { 10 }
                     'source_bundle' { 30 }
+                    'python_wheel' { 49 }
                     'wheelhouse' { 50 }
                     default { 45 }
                 }

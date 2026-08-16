@@ -84,10 +84,24 @@ $wheelZip = Join-Path $sources 'wheelhouse.zip'
 New-TestZip $wheelZip @{'fixture-1.0-py3-none-any.whl'='wheel'}
 $wheelComponent = New-Artifact 'python-wheelhouse' 'wheelhouse' $wheelZip
 Copy-Item -LiteralPath $wheelZip -Destination (Join-Path $downloads $wheelComponent.filename)
+$externalWheel = Join-Path $sources 'torch-2.11.0+cu128-cp311-cp311-win_amd64.whl'
+[IO.File]::WriteAllText($externalWheel, 'external-wheel', (New-Object Text.UTF8Encoding($false)))
+$externalComponent = New-Artifact 'torch-cu128-wheel' 'python_wheel' $externalWheel
+Copy-Item -LiteralPath $externalWheel -Destination (Join-Path $downloads $externalComponent.filename)
 $wheelLock = Join-Path $sources 'wheel-lock.json'
-$lockValue = [ordered]@{schema_version=1;groups=[ordered]@{s2s=@();livetalking=@()};wheels=@()}
+$archivedWheelBytes = [Text.Encoding]::UTF8.GetBytes('wheel')
+$archivedWheelSha = [BitConverter]::ToString(([Security.Cryptography.SHA256]::Create()).ComputeHash($archivedWheelBytes)).Replace('-','').ToLowerInvariant()
+$lockValue = [ordered]@{
+    schema_version=1
+    groups=[ordered]@{s2s=@();livetalking=@()}
+    wheels=@(
+        [ordered]@{filename='fixture-1.0-py3-none-any.whl';bytes=$archivedWheelBytes.Length;sha256=$archivedWheelSha},
+        [ordered]@{filename=$externalComponent.filename;bytes=$externalComponent.bytes;sha256=$externalComponent.sha256}
+    )
+}
 [IO.File]::WriteAllText($wheelLock, ($lockValue | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding($false)))
 $processCalls = New-Object Collections.Generic.List[string]
+$observedWheelFiles = New-Object Collections.Generic.List[string]
 $fakeProcess = {
     param($file,$arguments)
     $processCalls.Add("$file $($arguments -join ' ')")
@@ -96,18 +110,26 @@ $fakeProcess = {
         New-Item -ItemType Directory -Path (Split-Path -Parent $fakeVenvPython) -Force | Out-Null
         [IO.File]::WriteAllBytes($fakeVenvPython, [byte[]](77,90))
     }
+    $findLinksIndex = [Array]::IndexOf([object[]]$arguments, '--find-links')
+    if ($findLinksIndex -ge 0 -and $findLinksIndex + 1 -lt $arguments.Count) {
+        foreach ($wheelFile in @(Get-ChildItem -LiteralPath ([string]$arguments[$findLinksIndex + 1]) -Filter '*.whl' -File)) {
+            if (-not $observedWheelFiles.Contains($wheelFile.Name)) { $observedWheelFiles.Add($wheelFile.Name) }
+        }
+    }
     return 0
 }
 $wheelMarker = Install-LiveAvatarComponent -Component $wheelComponent -Layout $layout -DownloadRoot $downloads `
     -WheelLockPath $wheelLock -ProcessAction $fakeProcess
 Assert-True (Test-Path -LiteralPath $wheelMarker -PathType Leaf) 'wheelhouse writes installation marker'
 Assert-True (($processCalls -join "`n") -match '--no-index --find-links') 'wheelhouse installs without package indexes'
+Assert-True ($observedWheelFiles.Contains($externalComponent.filename)) 'external PyTorch wheel is merged into the verified local wheel directory'
 Assert-True (($processCalls -join "`n") -match '--no-build-isolation --no-deps -e') 'speech pipeline is installed editable from the bundled source'
 Assert-Equal 2 @(Get-ChildItem -Path $layout.version_root -Filter python.exe -Recurse | Where-Object FullName -match '\\.venv\\').Count 'wheelhouse creates two isolated environments'
 
 $productionOrder = Get-LiveAvatarInstallOrder @(
     [pscustomobject]@{id='wav2lip-model';install_kind='google_drive'},
     [pscustomobject]@{id='python-wheelhouse';install_kind='wheelhouse'},
+    [pscustomobject]@{id='torch-cu128-wheel';install_kind='python_wheel'},
     [pscustomobject]@{id='livetalking-bundle';install_kind='source_bundle'},
     [pscustomobject]@{id='llama-cudart';install_kind='zip_overlay'},
     [pscustomobject]@{id='llama-cuda';install_kind='zip'},
@@ -115,7 +137,7 @@ $productionOrder = Get-LiveAvatarInstallOrder @(
     [pscustomobject]@{id='default-avatar';install_kind='google_drive_archive'},
     [pscustomobject]@{id='speech-to-speech-bundle';install_kind='source_bundle'}
 )
-Assert-Equal 'python-3-11-9,llama-cuda,llama-cudart,speech-to-speech-bundle,livetalking-bundle,wav2lip-model,default-avatar,python-wheelhouse' `
+Assert-Equal 'python-3-11-9,llama-cuda,llama-cudart,speech-to-speech-bundle,livetalking-bundle,wav2lip-model,default-avatar,torch-cu128-wheel,python-wheelhouse' `
     (($productionOrder | ForEach-Object id) -join ',') 'components are staged in dependency order'
 
 $hardware = [pscustomobject]@{gpu_name='Fixture RTX';vram_mib=16384;compute_capability='8.6'}
