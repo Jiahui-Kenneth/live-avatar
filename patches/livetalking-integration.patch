@@ -740,10 +740,10 @@ index e0d4794..bb9e95b 100644
 +    app.router.add_delete("/api/avatar/{avatar_id}", delete_avatar)
 diff --git a/server/avatar_store.py b/server/avatar_store.py
 new file mode 100644
-index 0000000..fe65c57
+index 0000000..d768e29
 --- /dev/null
 +++ b/server/avatar_store.py
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,147 @@
 +import json
 +import os
 +import re
@@ -879,6 +879,9 @@ index 0000000..fe65c57
 +        target = self._avatar_path(safe_id)
 +        with self._lock:
 +            if safe_id in self.builtin_ids:
++                raise AvatarConflict("built-in avatar cannot be deleted")
++            metadata_path = target / "metadata.json"
++            if metadata_path.is_file() and self._read_json(metadata_path).get("built_in") is True:
 +                raise AvatarConflict("built-in avatar cannot be deleted")
 +            active = self.get_active()
 +            if active and active.get("avatar_id") == safe_id:
@@ -1576,10 +1579,10 @@ index 0000000..ba719a8
 +    unittest.main()
 diff --git a/tests/test_avatar_store.py b/tests/test_avatar_store.py
 new file mode 100644
-index 0000000..03c3998
+index 0000000..0b13855
 --- /dev/null
 +++ b/tests/test_avatar_store.py
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,114 @@
 +import json
 +import tempfile
 +import unittest
@@ -1677,6 +1680,19 @@ index 0000000..03c3998
 +        self.store.delete("avatar_unused", set())
 +
 +        self.assertFalse(target.exists())
++
++    def test_delete_honors_persisted_builtin_metadata(self):
++        self.store.commit_staging(
++            self.make_avatar("legacy_builtin"),
++            {
++                "avatar_id": "legacy_builtin",
++                "display_name": "Legacy built-in",
++                "built_in": True,
++            },
++        )
++
++        with self.assertRaisesRegex(AvatarConflict, "built-in"):
++            self.store.delete("legacy_builtin", set())
 +
 +
 +if __name__ == "__main__":
