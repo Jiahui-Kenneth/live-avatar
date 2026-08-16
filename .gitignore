@@ -39,6 +39,7 @@ Thumbs.db
 /deps/
 /models/
 /logs/
+/installer/dist/*.zip
 
 # Patch artifacts
 *.orig

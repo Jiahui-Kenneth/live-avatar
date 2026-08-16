@@ -84,7 +84,7 @@ function Test-LiveAvatarComponentCatalog {
                 Assert-ObjectProperties $component ($base + @('package','index_url')) $package "component '$id'"
                 Assert-HttpsUrl ([string]$component.index_url) "component '$id' index URL"
             }
-            { $_ -in @('python_exe','zip','zip_overlay','google_drive','google_drive_archive') } {
+            { $_ -in @('python_exe','zip','zip_overlay','google_drive','google_drive_archive','source_bundle','wheelhouse') } {
                 Assert-ObjectProperties $component ($base + @('filename','urls','bytes','sha256')) $artifact "component '$id'"
                 if ([string]$component.sha256 -notmatch '^[0-9a-f]{64}$') { throw "invalid sha256 for '$id'" }
                 Assert-PositiveInteger $component.bytes "component '$id' bytes"
