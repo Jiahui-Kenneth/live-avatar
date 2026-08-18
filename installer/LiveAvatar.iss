@@ -1,5 +1,5 @@
 #define MyAppName "Live Avatar"
-#define MyAppVersion "0.1.2"
+#define MyAppVersion "0.1.3"
 #define MyAppPublisher "HeiXia2077"
 #define MyAppURL "https://github.com/Jiahui-Kenneth/live-avatar"
 
@@ -22,8 +22,8 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName=Live Avatar {#MyAppVersion}
-VersionInfoVersion=0.1.2.0
-VersionInfoProductVersion=0.1.2
+VersionInfoVersion=0.1.3.0
+VersionInfoProductVersion=0.1.3
 VersionInfoDescription=Live Avatar online installer
 ChangesEnvironment=no
 
