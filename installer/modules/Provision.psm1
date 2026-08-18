@@ -106,31 +106,117 @@ function Get-ComponentTarget {
 }
 
 function Invoke-CheckedProcess {
-    param([string]$FilePath, [string[]]$Arguments, [scriptblock]$ProcessAction)
+    param([string]$FilePath, [string[]]$Arguments, [scriptblock]$ProcessAction, [switch]$WaitForExit)
     if ($null -ne $ProcessAction) {
-        $result = & $ProcessAction $FilePath $Arguments
+        $result = & $ProcessAction $FilePath $Arguments ([bool]$WaitForExit)
         if ($null -ne $result -and [int]$result -ne 0) { throw "process failed with exit ${result}: $FilePath" }
         return
     }
+    if ($WaitForExit) {
+        $quotedArguments = @($Arguments | ForEach-Object { '"' + ([string]$_).Replace('"','\"') + '"' })
+        $process = Start-Process -FilePath $FilePath -ArgumentList $quotedArguments -WindowStyle Hidden -Wait -PassThru
+        if ($process.ExitCode -ne 0) { throw "process failed with exit $($process.ExitCode): $FilePath" }
+        return
+    }
+    $global:LASTEXITCODE = 0
     & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "process failed with exit ${LASTEXITCODE}: $FilePath" }
+    $exitCode = [int]$global:LASTEXITCODE
+    if ($exitCode -ne 0) { throw "process failed with exit ${exitCode}: $FilePath" }
+}
+
+function Test-PythonRuntime3119 {
+    param([string]$PythonPath, [scriptblock]$ValidationAction)
+    if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) { return $false }
+    if ($null -ne $ValidationAction) { return [bool](& $ValidationAction $PythonPath) }
+    $process = $null
+    try {
+        $startInfo = New-Object Diagnostics.ProcessStartInfo
+        $startInfo.FileName = [IO.Path]::GetFullPath($PythonPath)
+        $startInfo.Arguments = '--version'
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $process = New-Object Diagnostics.Process
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) { return $false }
+        $standardOutput = $process.StandardOutput.ReadToEnd()
+        $standardError = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        $version = "$standardOutput $standardError".Trim()
+        return $process.ExitCode -eq 0 -and $version -match '^Python 3\.11\.9'
+    }
+    catch { return $false }
+    finally { if ($null -ne $process) { $process.Dispose() } }
+}
+
+function Get-PythonRootsFromInstallerLog {
+    param([string]$LogPath)
+    if (-not (Test-Path -LiteralPath $LogPath -PathType Leaf)) { return @() }
+    $seen = @{}
+    $roots = New-Object Collections.Generic.List[string]
+    foreach ($line in @(Get-Content -LiteralPath $LogPath -Encoding UTF8)) {
+        if ([string]$line -notmatch "Setting string variable 'TargetDir' to value '([^']+)'") { continue }
+        try { $root = [IO.Path]::GetFullPath([string]$Matches[1]).TrimEnd('\') } catch { continue }
+        if (-not $seen.ContainsKey($root)) {
+            $seen[$root] = $true
+            $roots.Add($root)
+        }
+    }
+    return @($roots)
+}
+
+function Import-PythonRuntime {
+    param([string]$SourceRoot, $Layout, [scriptblock]$ValidationAction)
+    $source = [IO.Path]::GetFullPath($SourceRoot).TrimEnd('\')
+    $target = [IO.Path]::GetFullPath([string]$Layout.python_root).TrimEnd('\')
+    if ($source.Equals($target, [StringComparison]::OrdinalIgnoreCase)) { return $false }
+    if (-not (Test-PythonRuntime3119 (Join-Path $source 'python.exe') $ValidationAction)) { return $false }
+
+    $stage = "$target.import-$([guid]::NewGuid().ToString('N'))"
+    try {
+        Copy-Item -LiteralPath $source -Destination $stage -Recurse
+        if (-not (Test-PythonRuntime3119 (Join-Path $stage 'python.exe') $ValidationAction)) {
+            throw 'Imported Python runtime is not exactly 3.11.9'
+        }
+        if (Test-Path -LiteralPath $target -PathType Container) {
+            $quarantine = "$target.incomplete-$([guid]::NewGuid().ToString('N'))"
+            Move-Item -LiteralPath $target -Destination $quarantine
+            try { Move-Item -LiteralPath $stage -Destination $target }
+            catch {
+                if (-not (Test-Path -LiteralPath $target) -and (Test-Path -LiteralPath $quarantine)) {
+                    Move-Item -LiteralPath $quarantine -Destination $target
+                }
+                throw
+            }
+            if (Test-Path -LiteralPath $quarantine -PathType Container) {
+                Remove-Item -LiteralPath $quarantine -Recurse -Force
+            }
+        }
+        else { Move-Item -LiteralPath $stage -Destination $target }
+        return $true
+    }
+    finally {
+        if (Test-Path -LiteralPath $stage -PathType Container) { Remove-Item -LiteralPath $stage -Recurse -Force }
+    }
 }
 
 function Install-PythonRuntime {
-    param($Component, $Layout, [string]$ArtifactPath, [scriptblock]$ProcessAction)
+    param($Component, $Layout, [string]$ArtifactPath, [scriptblock]$ProcessAction, [scriptblock]$PythonValidationAction)
     $python = Join-Path $Layout.python_root 'python.exe'
-    if (Test-Path -LiteralPath $python -PathType Leaf) {
-        $version = @(& $python --version 2>&1)
-        if ($LASTEXITCODE -eq 0 -and ($version -join ' ') -match '^Python 3\.11\.9') { return $python }
+    if (Test-PythonRuntime3119 $python $PythonValidationAction) { return $python }
+
+    $logPath = Join-Path $Layout.logs_root ("python-3.11.9-install-$([guid]::NewGuid().ToString('N')).log")
+    $arguments = @('/quiet','InstallAllUsers=0','PrependPath=0','Include_launcher=0','Include_test=0',"TargetDir=$($Layout.python_root)",'/log',$logPath)
+    Invoke-CheckedProcess $ArtifactPath $arguments $ProcessAction -WaitForExit
+    if (Test-PythonRuntime3119 $python $PythonValidationAction) { return $python }
+
+    foreach ($existingRoot in @(Get-PythonRootsFromInstallerLog $logPath)) {
+        if (Import-PythonRuntime $existingRoot $Layout $PythonValidationAction) {
+            if (Test-PythonRuntime3119 $python $PythonValidationAction) { return $python }
+        }
     }
-    $arguments = @('/quiet','InstallAllUsers=0','PrependPath=0','Include_launcher=0','Include_test=0',"TargetDir=$($Layout.python_root)")
-    Invoke-CheckedProcess $ArtifactPath $arguments $ProcessAction
-    if ($null -eq $ProcessAction) {
-        if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw 'Python installer did not create python.exe' }
-        $version = @(& $python --version 2>&1)
-        if ($LASTEXITCODE -ne 0 -or ($version -join ' ') -notmatch '^Python 3\.11\.9') { throw 'Python runtime is not exactly 3.11.9' }
-    }
-    return $python
+    throw 'Python installer did not create or expose a usable Python 3.11.9 runtime'
 }
 
 function Install-ZipComponent {
@@ -260,19 +346,30 @@ function Install-LiveAvatarComponent {
         [Parameter(Mandatory = $true)][string]$DownloadRoot,
         [string]$WheelLockPath,
         [scriptblock]$ProcessAction,
+        [scriptblock]$PythonValidationAction,
         [switch]$Repair
     )
     $artifactPath = Join-Path ([IO.Path]::GetFullPath($DownloadRoot)) ([string]$Component.filename)
     if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) { throw "verified artifact is missing: $artifactPath" }
     $kind = [string]$Component.install_kind
     switch ($kind) {
-        'python_exe' { return Install-PythonRuntime $Component $Layout $artifactPath $ProcessAction }
+        'python_exe' { return Install-PythonRuntime $Component $Layout $artifactPath $ProcessAction $PythonValidationAction }
         { $_ -in @('zip','zip_overlay','source_bundle') } { return Install-ZipComponent $Component $Layout $artifactPath -Repair:$Repair }
         'python_wheel' { return $artifactPath }
         'wheelhouse' { return Install-Wheelhouse $Component $Layout $artifactPath $DownloadRoot $WheelLockPath $ProcessAction }
         'gguf' {
-            $bytes = [IO.File]::ReadAllBytes($artifactPath)
-            if ($bytes.Length -lt 4 -or [Text.Encoding]::ASCII.GetString($bytes,0,4) -ne 'GGUF') { throw 'model file does not have a GGUF header' }
+            $header = New-Object byte[] 4
+            $stream = [IO.File]::OpenRead($artifactPath)
+            try {
+                $offset = 0
+                while ($offset -lt $header.Length) {
+                    $read = $stream.Read($header, $offset, $header.Length - $offset)
+                    if ($read -eq 0) { break }
+                    $offset += $read
+                }
+            }
+            finally { $stream.Dispose() }
+            if ($offset -lt 4 -or [Text.Encoding]::ASCII.GetString($header) -ne 'GGUF') { throw 'model file does not have a GGUF header' }
             return Copy-FileAtomically $artifactPath (Get-ComponentTarget $Component $Layout)
         }
         'google_drive' { return Copy-FileAtomically $artifactPath (Get-ComponentTarget $Component $Layout) }

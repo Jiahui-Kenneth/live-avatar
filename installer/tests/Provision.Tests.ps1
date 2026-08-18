@@ -75,6 +75,39 @@ Copy-Item -LiteralPath $modelFile -Destination (Join-Path $downloads $modelArtif
 $installedModel = Install-LiveAvatarComponent -Component $modelArtifact -Layout $layout -DownloadRoot $downloads
 Assert-Equal (Join-Path $layout.models_root 'tiny.gguf') $installedModel 'model target'
 Assert-Equal 'GGUF' ([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($installedModel),0,4)) 'model header verified'
+$provisionSource = Get-Content -LiteralPath "$PSScriptRoot\..\modules\Provision.psm1" -Raw -Encoding UTF8
+Assert-True ($provisionSource -notmatch '\[IO\.File\]::ReadAllBytes\(\$artifactPath\)') 'GGUF validation does not load multi-gigabyte models into one byte array'
+
+$pythonInstaller = Join-Path $sources 'python-3.11.9-amd64.exe'
+[IO.File]::WriteAllText($pythonInstaller, 'fixture-installer', (New-Object Text.UTF8Encoding($false)))
+$pythonComponent = New-Artifact 'python-3-11-9' 'python_exe' $pythonInstaller
+Copy-Item -LiteralPath $pythonInstaller -Destination (Join-Path $downloads $pythonComponent.filename)
+$existingPythonRoot = Join-Path $base 'Existing Python311'
+New-Item -ItemType Directory -Path (Join-Path $existingPythonRoot 'Lib') -Force | Out-Null
+[IO.File]::WriteAllBytes((Join-Path $existingPythonRoot 'python.exe'), [byte[]](77,90))
+[IO.File]::WriteAllText((Join-Path $existingPythonRoot 'Lib\os.py'), '# fixture stdlib', (New-Object Text.UTF8Encoding($false)))
+$pythonInstallerCalls = New-Object Collections.Generic.List[string]
+$pythonInstallerWaitModes = New-Object Collections.Generic.List[bool]
+$fakePythonInstaller = {
+    param($file,$arguments,$waitForExit)
+    $pythonInstallerCalls.Add("$file $($arguments -join ' ')")
+    $pythonInstallerWaitModes.Add([bool]$waitForExit)
+    $logIndex = [Array]::IndexOf([object[]]$arguments, '/log')
+    if ($logIndex -lt 0 -or $logIndex + 1 -ge $arguments.Count) { throw 'fixture expected a Python installer log path' }
+    $logPath = [string]$arguments[$logIndex + 1]
+    [IO.File]::WriteAllText($logPath, "i000: Setting string variable 'TargetDir' to value '$existingPythonRoot\'", (New-Object Text.UTF8Encoding($false)))
+    return 0
+}.GetNewClosure()
+$validateFixturePython = {
+    param($candidate)
+    return (Test-Path -LiteralPath $candidate -PathType Leaf)
+}
+$installedPython = Install-LiveAvatarComponent -Component $pythonComponent -Layout $layout -DownloadRoot $downloads `
+    -ProcessAction $fakePythonInstaller -PythonValidationAction $validateFixturePython
+Assert-Equal (Join-Path $layout.python_root 'python.exe') $installedPython 'existing Python is imported into the private runtime'
+Assert-True (Test-Path -LiteralPath (Join-Path $layout.python_root 'Lib\os.py') -PathType Leaf) 'existing Python standard library is copied'
+Assert-True (($pythonInstallerCalls -join "`n") -match '/log') 'Python installer writes a diagnostic log for existing-install discovery'
+Assert-True ($pythonInstallerWaitModes.Contains($true)) 'Python installer waits for completion before its log is inspected'
 
 $liveTalkingRoot = Join-Path $layout.version_root 'LiveTalking'
 New-Item -ItemType Directory -Path $liveTalkingRoot -Force | Out-Null
