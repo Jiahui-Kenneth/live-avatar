@@ -32,6 +32,12 @@ Assert-True (($specs | Where-Object id -eq 's2s').environment.LIVETALKING_URL -e
 Assert-True (($specs | Where-Object id -eq 's2s').environment.HF_HOME -eq (Join-Path $dataRoot 'cache/huggingface')) 'speech model cache moves with user data'
 Assert-True (($specs | Where-Object id -eq 'livetalking').environment.LIVE_AVATAR_DATA_DIR -eq $dataRoot) 'avatar data root is externalized'
 
+$serviceExecutables = @((Join-Path $llamaRoot 'llama-server.exe'),(Join-Path $s2sRoot '.venv/Scripts/python.exe'),(Join-Path $ltRoot '.venv/Scripts/python.exe'))
+foreach ($serviceExecutable in $serviceExecutables) { Copy-Item -LiteralPath $env:ComSpec -Destination $serviceExecutable -Force }
+$defaultStarted = Start-LiveAvatarServices -Layout $layout -AdminToken ('x' * 43) -HealthProbe { $true }
+Assert-Equal 'llama,livetalking,s2s,demo' (($defaultStarted | ForEach-Object component_id) -join ',') 'default service starter retains access to module-private helpers'
+foreach ($record in $defaultStarted) { Stop-Process -Id ([int]$record.pid) -Force -ErrorAction SilentlyContinue }
+
 $started = New-Object Collections.Generic.List[object]
 $stopped = New-Object Collections.Generic.List[int]
 $nextPid = [ref]100

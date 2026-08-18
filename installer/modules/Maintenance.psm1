@@ -131,20 +131,25 @@ function Start-LiveAvatarServices {
         [scriptblock]$ProcessStarter,[scriptblock]$HealthProbe,[scriptblock]$ProcessStopper
     )
     $started = New-Object Collections.Generic.List[object]
-    if ($null -eq $ProcessStarter) { $ProcessStarter = { param($spec) Start-ServiceSpec $spec $Layout.logs_root }.GetNewClosure() }
-    if ($null -eq $HealthProbe) { $HealthProbe = { param($id,$activeLayout) Wait-ServiceReady $id $activeLayout }.GetNewClosure() }
-    if ($null -eq $ProcessStopper) { $ProcessStopper = { param($record) Stop-Process -Id ([int]$record.pid) -Force -ErrorAction Stop } }
+    $useDefaultStarter = $null -eq $ProcessStarter
+    $useDefaultHealthProbe = $null -eq $HealthProbe
+    $useDefaultStopper = $null -eq $ProcessStopper
     try {
         foreach ($spec in @(Get-LiveAvatarServiceSpecs $Layout $AdminToken)) {
-            $record = & $ProcessStarter $spec
+            $record = if ($useDefaultStarter) { Start-ServiceSpec $spec $Layout.logs_root } else { & $ProcessStarter $spec }
             $started.Add($record)
-            & $HealthProbe ([string]$spec.id) $Layout | Out-Null
+            if ($useDefaultHealthProbe) { Wait-ServiceReady ([string]$spec.id) $Layout | Out-Null }
+            else { & $HealthProbe ([string]$spec.id) $Layout | Out-Null }
         }
         return $started.ToArray()
     }
     catch {
         for ($index=$started.Count-1; $index -ge 0; $index--) {
-            try { & $ProcessStopper $started[$index] } catch {}
+            try {
+                if ($useDefaultStopper) { Stop-Process -Id ([int]$started[$index].pid) -Force -ErrorAction Stop }
+                else { & $ProcessStopper $started[$index] }
+            }
+            catch {}
         }
         throw
     }
