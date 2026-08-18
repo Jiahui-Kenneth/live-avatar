@@ -1,13 +1,13 @@
 . "$PSScriptRoot\TestHarness.ps1"
 
 $issPath = Join-Path $PSScriptRoot '..\LiveAvatar.iss'
-$setupPath = Join-Path $PSScriptRoot '..\dist\LiveAvatar-Setup-0.1.0.exe'
+$setupPath = Join-Path $PSScriptRoot '..\dist\LiveAvatar-Setup-0.1.1.exe'
 Assert-True (Test-Path -LiteralPath $issPath -PathType Leaf) 'Inno Setup source exists'
 Assert-True (Test-Path -LiteralPath $setupPath -PathType Leaf) 'compiled setup exists'
 if (Test-Path -LiteralPath $setupPath -PathType Leaf) {
     $setup = Get-Item -LiteralPath $setupPath
     Assert-True ($setup.Length -lt 50MB) 'setup stays below 50 MiB'
-    Assert-True ([string]$setup.VersionInfo.ProductVersion -match '^0\.1\.0') 'setup embeds version 0.1.0'
+    Assert-True ([string]$setup.VersionInfo.ProductVersion -match '^0\.1\.1') 'setup embeds version 0.1.1'
 }
 
 if (Test-Path -LiteralPath $issPath -PathType Leaf) {
