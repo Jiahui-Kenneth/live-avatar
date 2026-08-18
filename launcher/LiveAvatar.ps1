@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position=0)][ValidateSet('start','stop','status','doctor','repair','update','export-data','import-data')][string]$Command='start',
-    [string]$InstallRoot=(Split-Path -Parent $PSScriptRoot),
+    [string]$InstallRoot,
     [string]$ArchivePath,
     [string]$ManifestPath,
     [string]$ModelManifestPath,
@@ -10,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference='Stop'
+if ([string]::IsNullOrWhiteSpace($InstallRoot)) { $InstallRoot=Split-Path -Parent $PSScriptRoot }
 $InstallRoot=[IO.Path]::GetFullPath($InstallRoot)
 $installerRoot=Join-Path $InstallRoot 'installer'
 $moduleRoot=Join-Path $installerRoot 'modules'
