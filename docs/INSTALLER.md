@@ -1,11 +1,11 @@
 # Live Avatar 联网安装包
 
-`LiveAvatar-Setup-0.1.1.exe` 是一个小型、每用户安装的 Windows 引导程序。它不内置 LLM、CUDA 运行时或 Python wheelhouse；安装时检测 NVIDIA GPU 和显存，推荐合适的 Qwen3.5 GGUF，然后断点续传并用固定字节数与 SHA-256 校验全部载荷。
+`LiveAvatar-Setup-0.1.2.exe` 是一个小型、每用户安装的 Windows 引导程序。它不内置 LLM、CUDA 运行时或 Python wheelhouse；安装时检测 NVIDIA GPU 和显存，推荐合适的 Qwen3.5 GGUF，然后断点续传并用固定字节数与 SHA-256 校验全部载荷。
 
 ## 支持范围
 
 - Windows 10/11 x64。
-- 单张 NVIDIA RTX 20/30/40/50 系列 GPU；v0.1.1 不支持多 GPU、AMD、Intel GPU、macOS 或 Linux。
+- 单张 NVIDIA RTX 20/30/40/50 系列 GPU；v0.1.2 不支持多 GPU、AMD、Intel GPU、macOS 或 Linux。
 - NVIDIA 驱动必须支持 CUDA 12.8。RTX 50/Blackwell 使用 PyTorch `2.11.0+cu128`、torchvision `0.26.0+cu128`、torchaudio `2.11.0+cu128`，启动时应显示计算能力 `(12, 0)`。
 - 推荐 32 GiB 系统内存；大型模型建议 64 GiB。
 
@@ -33,7 +33,7 @@
 ## 安装
 
 1. 更新 NVIDIA 驱动，关闭占用 8080、8010、8765、7860 的其它程序。
-2. 运行 `LiveAvatar-Setup-0.1.1.exe`。
+2. 运行 `LiveAvatar-Setup-0.1.2.exe`。
 3. 选择程序目录和数据目录。路径可以包含空格和中文。
 4. 检查 GPU、显存、推荐模型、模式和下载量，确认安装。
 5. 下载中断后重新运行安装器；`.partial` 文件会保留并由 `curl -C -` 继续下载。完成前后都会核对字节数和 SHA-256，错误文件会以 `.bad-*` 隔离。
@@ -83,13 +83,13 @@ launcher\LiveAvatar.ps1 import-data -ArchivePath "D:\Backup\live-avatar-data.zip
 
 Windows“已安装的应用”中卸载 Live Avatar。模型、自定义头像和设置默认全部保留。卸载页提供三个独立复选框；只有显式勾选时，才删除记录的数据目录下对应的 `models`、`avatars` 或 `config` 子目录。卸载器不会递归删除整个外置数据根目录。
 
-## v0.1.1 发布文件
+## v0.1.2 发布文件
 
 本机构建结果：
 
 | 文件 | 字节 | SHA-256 |
 |---|---:|---|
-| `LiveAvatar-Setup-0.1.1.exe` | 2,130,024 | `8bd958313908fce80c413ad13ae9fabc66b29044aefaee2fc57ef192a33c8438` |
+| `LiveAvatar-Setup-0.1.2.exe` | 2,130,784 | `9896c6699feb208ea0829e1ac2814fe505edf20d045b4a91add574099a59fd4d` |
 | `python-wheelhouse-live-avatar-v0.1.0.zip` | 457,470,408 | `73ee9e604aac6247e378687676fc2f8b2b44427a6c6dbc7b2c4599e1e0133c0c` |
 
 源码包、完整 release manifest 以及剩余发布文件的字节数和 SHA-256 以 `installer/manifests/components-v0.1.0.json` 为准。正式上传 GitHub Release 后，应再次核对下载文件与本表。
