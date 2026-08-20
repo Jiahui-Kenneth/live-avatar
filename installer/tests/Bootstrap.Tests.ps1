@@ -82,6 +82,22 @@ Assert-True (Test-Path -LiteralPath (Join-Path $dataRoot 'models/tiny.gguf') -Pa
 Assert-Equal 'contained portrait fixture' (Get-Content -LiteralPath (Join-Path $installRoot 'app/versions/0.1.0/LiveTalking/web/embed.html') -Raw -Encoding UTF8) 'bootstrap applies the packaged avatar display overlay'
 Assert-True (($output -join "`n") -match '"status"\s*:\s*"installed"') 'bootstrap emits installed result'
 
+[IO.File]::WriteAllText((Join-Path $installRoot 'app/versions/0.1.0/LiveTalking/web/embed.html'), 'legacy stretched layout', (New-Object Text.UTF8Encoding($false)))
+$customAvatar = Join-Path $dataRoot 'avatars/custom/metadata.json'
+New-Item -ItemType Directory -Path (Split-Path -Parent $customAvatar) -Force | Out-Null
+[IO.File]::WriteAllText($customAvatar, 'preserve custom avatar', (New-Object Text.UTF8Encoding($false)))
+$currentHashBeforeOverlayUpdate = (Get-FileHash -LiteralPath (Join-Path $installRoot 'current.json') -Algorithm SHA256).Hash
+Remove-Item -LiteralPath (Join-Path $dataRoot 'cache/downloads') -Recurse -Force
+Remove-Item -LiteralPath $zipPath,$modelPath -Force
+$overlayUpdateOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\..\bootstrap.ps1" `
+    -InstallRoot $installRoot -OverlayRoot $overlayRoot -OverlayOnly 2>&1)
+Assert-Equal 0 $LASTEXITCODE 'existing install overlay update exits successfully without artifacts'
+Assert-Equal 'contained portrait fixture' (Get-Content -LiteralPath (Join-Path $installRoot 'app/versions/0.1.0/LiveTalking/web/embed.html') -Raw -Encoding UTF8) 'existing install overlay update replaces only the runtime page'
+Assert-True (($overlayUpdateOutput -join "`n") -match '"status"\s*:\s*"updated-overlays"') 'overlay-only bootstrap emits update result'
+Assert-Equal 'preserve custom avatar' (Get-Content -LiteralPath $customAvatar -Raw -Encoding UTF8) 'overlay-only update preserves custom avatars'
+Assert-Equal $currentHashBeforeOverlayUpdate (Get-FileHash -LiteralPath (Join-Path $installRoot 'current.json') -Algorithm SHA256).Hash 'overlay-only update leaves active-version metadata unchanged'
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $dataRoot 'cache/downloads'))) 'overlay-only update does not recreate the download cache'
+
 $planOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\..\bootstrap.ps1" `
     -InstallRoot (Join-Path $root 'Plan Only') -DataRoot (Join-Path $root 'Plan Data') -Preference Recommended -Unattended `
     -ManifestPath "$PSScriptRoot\..\manifests\components-v0.1.0.json" `

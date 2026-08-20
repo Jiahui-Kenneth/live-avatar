@@ -12,6 +12,7 @@ param(
     [string]$NvidiaSmiPath = (Join-Path $env:WINDIR 'System32\nvidia-smi.exe'),
     [string]$FixtureSourceRoot,
     [string]$OverlayRoot,
+    [switch]$OverlayOnly,
     [switch]$WhatIf
 )
 
@@ -20,14 +21,25 @@ if ([string]::IsNullOrWhiteSpace($ManifestPath)) { $ManifestPath = Join-Path $PS
 if ([string]::IsNullOrWhiteSpace($ModelManifestPath)) { $ModelManifestPath = Join-Path $PSScriptRoot 'manifests\models.json' }
 if ([string]::IsNullOrWhiteSpace($WheelLockPath)) { $WheelLockPath = Join-Path $PSScriptRoot 'manifests\python-requirements.lock.json' }
 if ([string]::IsNullOrWhiteSpace($OverlayRoot)) { $OverlayRoot = Join-Path $PSScriptRoot 'overlays' }
-Import-Module "$PSScriptRoot\modules\Manifest.psm1" -ErrorAction Stop
-Import-Module "$PSScriptRoot\modules\Hardware.psm1" -ErrorAction Stop
-Import-Module "$PSScriptRoot\modules\ModelSelection.psm1" -ErrorAction Stop
 Import-Module "$PSScriptRoot\modules\Layout.psm1" -ErrorAction Stop
 Import-Module "$PSScriptRoot\modules\Provision.psm1" -ErrorAction Stop
 
-if ([string]::IsNullOrWhiteSpace($DataRoot)) { $DataRoot = Join-Path $InstallRoot 'data' }
 $InstallRoot = [IO.Path]::GetFullPath($InstallRoot)
+if ($OverlayOnly) {
+    $activeLayout = Resolve-LiveAvatarLayout -InstallRoot $InstallRoot
+    $appliedOverlays = @(Install-LiveAvatarOverlays -Layout $activeLayout -OverlayRoot $OverlayRoot -Required)
+    [pscustomobject]@{
+        status='updated-overlays';version=[string]$activeLayout.config.app_version
+        install_root=$InstallRoot;data_root=[string]$activeLayout.data_root;overlays=$appliedOverlays
+    } | ConvertTo-Json -Depth 10
+    return
+}
+
+Import-Module "$PSScriptRoot\modules\Manifest.psm1" -ErrorAction Stop
+Import-Module "$PSScriptRoot\modules\Hardware.psm1" -ErrorAction Stop
+Import-Module "$PSScriptRoot\modules\ModelSelection.psm1" -ErrorAction Stop
+
+if ([string]::IsNullOrWhiteSpace($DataRoot)) { $DataRoot = Join-Path $InstallRoot 'data' }
 $DataRoot = [IO.Path]::GetFullPath($DataRoot)
 $components = Import-LiveAvatarManifest -Path $ManifestPath -Kind Component
 $models = Import-LiveAvatarManifest -Path $ModelManifestPath -Kind Model

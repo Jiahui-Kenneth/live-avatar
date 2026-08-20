@@ -23,6 +23,9 @@ if (Test-Path -LiteralPath $issPath -PathType Leaf) {
     Assert-True ($iss -match 'function InitializeUninstall\(\): Boolean') 'uninstall choices are shown before removal starts'
     Assert-True ($iss -match 'skipifsilent') 'silent fixture install skips online bootstrap'
     Assert-True ($iss -match 'installer\\overlays\\LiveTalking\\web') 'setup packages the avatar display overlay'
+    Assert-True ($iss -match 'procedure RegisterPreviousData\(PreviousDataKey: Integer\)') 'setup preserves the selected data root across upgrades'
+    Assert-True ($iss -match 'GetPreviousData\(') 'setup reloads the previous data root during upgrades'
+    Assert-True ($iss -match 'OverlayOnly') 'setup selects lightweight overlay updates for existing installs'
 }
 
 if (Test-Path -LiteralPath $setupPath -PathType Leaf) {
@@ -37,7 +40,8 @@ if (Test-Path -LiteralPath $setupPath -PathType Leaf) {
         Copy-Item -Path (Join-Path $shortcutRoot '*') -Destination $shortcutBackup -Recurse -Force
     }
     try {
-        $setupArguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$installRoot`" /DataRoot=`"$dataRoot`""
+        $installLog = Join-Path $fixtureRoot 'install.log'
+        $setupArguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$installLog`" /DIR=`"$installRoot`" /DataRoot=`"$dataRoot`""
         $setupProcess = Start-Process -FilePath $setupPath -ArgumentList $setupArguments -WindowStyle Hidden -Wait -PassThru
         Assert-Equal 0 $setupProcess.ExitCode 'silent per-user fixture install succeeds'
         Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'installer/bootstrap.ps1') -PathType Leaf) 'fixture install contains bootstrap'
@@ -46,6 +50,7 @@ if (Test-Path -LiteralPath $setupPath -PathType Leaf) {
         Assert-True (Test-Path -LiteralPath $installedOverlay -PathType Leaf) 'fixture install contains avatar display overlay'
         if (Test-Path -LiteralPath $installedOverlay -PathType Leaf) {
             Assert-True ((Get-Content -LiteralPath $installedOverlay -Raw -Encoding UTF8) -match 'object-fit:\s*contain') 'packaged overlay preserves portrait sharpness'
+            Assert-Equal (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot '..\..\web\embed.html') -Algorithm SHA256).Hash (Get-FileHash -LiteralPath $installedOverlay -Algorithm SHA256).Hash 'packaged overlay is byte-identical to the tracked runtime page'
         }
         $shortcuts = @(Get-ChildItem -LiteralPath $shortcutRoot -Filter '*.lnk' -File -ErrorAction SilentlyContinue)
         Assert-Equal 3 $shortcuts.Count 'fixture install creates three shortcuts'
@@ -58,6 +63,14 @@ if (Test-Path -LiteralPath $setupPath -PathType Leaf) {
             New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
             [IO.File]::WriteAllText($path,'preserve')
         }
+        $upgradeLog = Join-Path $fixtureRoot 'upgrade.log'
+        $upgradeArguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$upgradeLog`" /DIR=`"$installRoot`""
+        $upgradeProcess = Start-Process -FilePath $setupPath -ArgumentList $upgradeArguments -WindowStyle Hidden -Wait -PassThru
+        if ($upgradeProcess.ExitCode -ne 0 -and (Test-Path -LiteralPath $upgradeLog -PathType Leaf)) {
+            Write-Host (Get-Content -LiteralPath $upgradeLog -Raw -Encoding UTF8)
+        }
+        Assert-Equal 0 $upgradeProcess.ExitCode 'silent fixture upgrade succeeds without repeating the data-root option'
+        Assert-Equal ([IO.Path]::GetFullPath($dataRoot).TrimEnd('\')) ((Get-Content -LiteralPath (Join-Path $installRoot 'installer-data-root.txt') -Raw).Trim().TrimEnd('\')) 'fixture upgrade preserves the existing custom data root'
         $uninstaller = Join-Path $installRoot 'unins000.exe'
         $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -WindowStyle Hidden -Wait -PassThru
         Assert-Equal 0 $uninstallProcess.ExitCode 'silent fixture uninstall succeeds'

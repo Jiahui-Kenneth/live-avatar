@@ -90,15 +90,24 @@ function Install-LiveAvatarOverlays {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]$Layout,
-        [Parameter(Mandatory = $true)][string]$OverlayRoot
+        [Parameter(Mandatory = $true)][string]$OverlayRoot,
+        [switch]$Required
     )
     $applied = New-Object Collections.Generic.List[string]
     $relativePaths = @('LiveTalking\web\embed.html')
     foreach ($relativePath in $relativePaths) {
         $source = Join-Path $OverlayRoot $relativePath
-        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { continue }
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            if ($Required) { throw "required runtime overlay is missing: $source" }
+            continue
+        }
         $destination = Assert-PathBelowRoot $Layout.version_root (Join-Path $Layout.version_root $relativePath) 'overlay destination'
         Copy-FileAtomically $source $destination | Out-Null
+        $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
+        $destinationHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
+        if (-not $sourceHash.Equals($destinationHash, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "runtime overlay verification failed: $destination"
+        }
         $applied.Add($destination)
     }
     return $applied.ToArray()
@@ -524,7 +533,7 @@ function Invoke-LiveAvatarProvisioning {
     Write-LiveAvatarConfig -Layout $Layout -Hardware $Hardware -ModelSelection $ModelSelection -Ports $Ports | Out-Null
     if (-not [string]::IsNullOrWhiteSpace($OverlayRoot)) {
         Add-State 'apply-overlays'
-        Install-LiveAvatarOverlays -Layout $Layout -OverlayRoot $OverlayRoot | Out-Null
+        Install-LiveAvatarOverlays -Layout $Layout -OverlayRoot $OverlayRoot -Required | Out-Null
     }
     Add-State 'smoke-test'
     if ($null -ne $SmokeTestAction) {

@@ -83,7 +83,7 @@ launcher\LiveAvatar.ps1 import-data -ArchivePath "D:\Backup\live-avatar-data.zip
 
 Windows“已安装的应用”中卸载 Live Avatar。模型、自定义头像和设置默认全部保留。卸载页提供三个独立复选框；只有显式勾选时，才删除记录的数据目录下对应的 `models`、`avatars` 或 `config` 子目录。卸载器不会递归删除整个外置数据根目录。
 
-升级到 0.1.4 时会部署一个很小的数字人显示覆盖层：竖屏主体改为按原比例显示，横屏剩余区域使用同一视频的柔化背景补齐。已有 GGUF、Python 环境、语音模型和头像不需要重新下载。
+升级到 0.1.4 时会部署一个很小的数字人显示覆盖层：竖屏主体改为按原比例显示，横屏剩余区域使用同一视频的柔化背景补齐。升级会沿用原数据目录，只校验并替换覆盖层；已有 GGUF、Python 环境、语音模型和头像不需要重新下载。覆盖层缺失或复制后校验不一致时，升级会中止并保留当前版本。
 
 ## v0.1.4 发布文件
 
@@ -91,7 +91,7 @@ Windows“已安装的应用”中卸载 Live Avatar。模型、自定义头像�
 
 | 文件 | 字节 | SHA-256 |
 |---|---:|---|
-| `LiveAvatar-Setup-0.1.4.exe` | 2,132,832 | `3152b35a0edd052a886e707b4410e9fd7a2fc54fb19fb1e71bd956b50f58c7b2` |
+| `LiveAvatar-Setup-0.1.4.exe` | 2,133,206 | `e3068a21c8a7f35fdffc159de89abb6ef4514520c5bf3aeec7b2ce5958d4cd32` |
 | `python-wheelhouse-live-avatar-v0.1.0.zip` | 457,470,408 | `73ee9e604aac6247e378687676fc2f8b2b44427a6c6dbc7b2c4599e1e0133c0c` |
 
 源码包、完整 release manifest 以及剩余发布文件的字节数和 SHA-256 以 `installer/manifests/components-v0.1.0.json` 为准。正式上传 GitHub Release 后，应再次核对下载文件与本表。

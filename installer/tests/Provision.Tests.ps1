@@ -233,4 +233,18 @@ $overlayResult = Install-LiveAvatarOverlays -Layout $layout -OverlayRoot $overla
 Assert-Equal 1 $overlayResult.Count 'one packaged runtime overlay is applied'
 Assert-Equal 'clear portrait layout' (Get-Content -LiteralPath $installedEmbed -Raw -Encoding UTF8) 'runtime overlay replaces the installed embed page'
 
+$missingOverlayRoot = Join-Path $base 'Missing Installer Overlays'
+Assert-Throws {
+    Install-LiveAvatarOverlays -Layout $layout -OverlayRoot $missingOverlayRoot -Required
+} 'required runtime overlay cannot be silently skipped'
+
+$missingOverlayLayout = New-LiveAvatarLayout -InstallRoot $installRoot -DataRoot $dataRoot -Version '0.3.0'
+Assert-Throws {
+    Invoke-LiveAvatarProvisioning -Layout $missingOverlayLayout -Hardware $hardware -ModelSelection $selection `
+        -Components @($s2sComponent) -Ports $ports -DownloadAction $downloadAction `
+        -ComponentAction { param($component,$activeLayout,$downloadRoot) } `
+        -OverlayRoot $missingOverlayRoot -SmokeTestAction { $true }
+} 'provisioning cannot activate a version without its required runtime overlay'
+Assert-Equal '0.1.0' (Get-LiveAvatarCurrentVersion -InstallRoot $installRoot).version 'missing overlay keeps the previous version active'
+
 Complete-TestRun

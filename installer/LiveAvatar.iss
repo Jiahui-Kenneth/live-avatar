@@ -45,7 +45,7 @@ Name: "{userprograms}\Live Avatar\Stop Live Avatar"; Filename: "{app}\launcher\S
 Name: "{userprograms}\Live Avatar\Live Avatar Maintenance"; Filename: "{app}\launcher\Maintain-LiveAvatar.cmd"; Parameters: "doctor"; WorkingDir: "{app}"
 
 [Run]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\installer\bootstrap.ps1"" -InstallRoot ""{app}"" -DataRoot ""{code:GetDataRoot}"""; StatusMsg: "Downloading and verifying Live Avatar components..."; Flags: postinstall waituntilterminated skipifsilent
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\installer\bootstrap.ps1"" -InstallRoot ""{app}"" -DataRoot ""{code:GetDataRoot}""{code:GetBootstrapMode}"; StatusMsg: "Downloading or updating Live Avatar components..."; Flags: postinstall waituntilterminated skipifsilent
 
 [Code]
 var
@@ -59,18 +59,43 @@ var
   UninstallDataRoot: string;
 
 procedure InitializeWizard;
+var
+  SelectedDataRoot: string;
+  SavedDataRoot: AnsiString;
 begin
   DataDirPage := CreateInputDirPage(wpSelectDir,
     'Models and user data',
     'Choose where models, avatars, settings, and caches are stored.',
     'Keeping this separate lets upgrades preserve your personal data.', False, '');
   DataDirPage.Add('Data directory:');
-  DataDirPage.Values[0] := ExpandConstant('{param:DataRoot|{localappdata}\LiveAvatar\data}');
+  SelectedDataRoot := Trim(ExpandConstant('{param:DataRoot|}'));
+  if (SelectedDataRoot = '') and
+     FileExists(AddBackslash(WizardDirValue) + 'installer-data-root.txt') and
+     LoadStringFromFile(AddBackslash(WizardDirValue) + 'installer-data-root.txt', SavedDataRoot) then
+    SelectedDataRoot := Trim(String(SavedDataRoot));
+  if SelectedDataRoot = '' then
+    SelectedDataRoot := Trim(GetPreviousData('DataRoot', ''));
+  if SelectedDataRoot = '' then
+    SelectedDataRoot := ExpandConstant('{localappdata}\LiveAvatar\data');
+  DataDirPage.Values[0] := SelectedDataRoot;
 end;
 
 function GetDataRoot(Param: string): string;
 begin
   Result := DataDirPage.Values[0];
+end;
+
+function GetBootstrapMode(Param: string): string;
+begin
+  if FileExists(ExpandConstant('{app}\current.json')) then
+    Result := ' -OverlayOnly'
+  else
+    Result := '';
+end;
+
+procedure RegisterPreviousData(PreviousDataKey: Integer);
+begin
+  SetPreviousData(PreviousDataKey, 'DataRoot', GetDataRoot(''));
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
