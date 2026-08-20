@@ -63,18 +63,23 @@ $profile = [ordered]@{
 $componentPath = Join-Path $fixtures 'components.json'
 $modelManifestPath = Join-Path $fixtures 'models.json'
 $profilePath = Join-Path $fixtures 'hardware.json'
+$overlayRoot = Join-Path $fixtures 'overlays'
+$overlayEmbed = Join-Path $overlayRoot 'LiveTalking\web\embed.html'
 Write-JsonFixture $componentPath $componentManifest
 Write-JsonFixture $modelManifestPath $modelManifest
 Write-JsonFixture $profilePath $profile
+New-Item -ItemType Directory -Path (Split-Path -Parent $overlayEmbed) -Force | Out-Null
+[IO.File]::WriteAllText($overlayEmbed, 'contained portrait fixture', (New-Object Text.UTF8Encoding($false)))
 
 $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\..\bootstrap.ps1" `
     -InstallRoot $installRoot -DataRoot $dataRoot -Preference Recommended -Unattended `
     -ManifestPath $componentPath -ModelManifestPath $modelManifestPath -HardwareProfilePath $profilePath `
-    -FixtureSourceRoot $fixtures 2>&1)
+    -FixtureSourceRoot $fixtures -OverlayRoot $overlayRoot 2>&1)
 Assert-Equal 0 $LASTEXITCODE 'unattended fixture bootstrap exits successfully'
 Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'current.json') -PathType Leaf) 'bootstrap activates current version'
 Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'app/versions/0.1.0/speech-to-speech/demo/server.py') -PathType Leaf) 'bootstrap stages source bundle'
 Assert-True (Test-Path -LiteralPath (Join-Path $dataRoot 'models/tiny.gguf') -PathType Leaf) 'bootstrap stages model'
+Assert-Equal 'contained portrait fixture' (Get-Content -LiteralPath (Join-Path $installRoot 'app/versions/0.1.0/LiveTalking/web/embed.html') -Raw -Encoding UTF8) 'bootstrap applies the packaged avatar display overlay'
 Assert-True (($output -join "`n") -match '"status"\s*:\s*"installed"') 'bootstrap emits installed result'
 
 $planOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\..\bootstrap.ps1" `

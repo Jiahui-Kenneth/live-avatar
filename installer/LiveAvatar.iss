@@ -1,5 +1,5 @@
 #define MyAppName "Live Avatar"
-#define MyAppVersion "0.1.3"
+#define MyAppVersion "0.1.4"
 #define MyAppPublisher "HeiXia2077"
 #define MyAppURL "https://github.com/Jiahui-Kenneth/live-avatar"
 
@@ -22,8 +22,8 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName=Live Avatar {#MyAppVersion}
-VersionInfoVersion=0.1.3.0
-VersionInfoProductVersion=0.1.3
+VersionInfoVersion=0.1.4.0
+VersionInfoProductVersion=0.1.4
 VersionInfoDescription=Live Avatar online installer
 ChangesEnvironment=no
 
@@ -35,6 +35,7 @@ Source: "bootstrap.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "modules\*.psm1"; DestDir: "{app}\installer\modules"; Flags: ignoreversion
 Source: "manifests\*.json"; DestDir: "{app}\installer\manifests"; Flags: ignoreversion
 Source: "ui\*.psm1"; DestDir: "{app}\installer\ui"; Flags: ignoreversion
+Source: "..\web\embed.html"; DestDir: "{app}\installer\overlays\LiveTalking\web"; Flags: ignoreversion
 Source: "..\launcher\*.ps1"; DestDir: "{app}\launcher"; Flags: ignoreversion
 Source: "..\launcher\*.cmd"; DestDir: "{app}\launcher"; Flags: ignoreversion
 

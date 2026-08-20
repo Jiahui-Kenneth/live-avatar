@@ -28,6 +28,22 @@ class EmbedProtocolTest(unittest.TestCase):
         ):
             self.assertIn(fragment, source)
 
+    def test_portrait_video_keeps_a_contained_foreground_over_blurred_fill(self):
+        """Catch regressions that stretch a portrait avatar to viewport width."""
+        source = EMBED.read_text(encoding="utf-8")
+        for fragment in (
+            '<video id="video-backdrop"',
+            '#video-backdrop {',
+            'object-fit: cover;',
+            'filter: blur(',
+            '#video {',
+            'object-fit: contain;',
+            "const stream = evt.streams[0];",
+            "document.getElementById('video-backdrop').srcObject = stream;",
+            "document.getElementById('video').srcObject = stream;",
+        ):
+            self.assertIn(fragment, source)
+
 
 if __name__ == "__main__":
     unittest.main()

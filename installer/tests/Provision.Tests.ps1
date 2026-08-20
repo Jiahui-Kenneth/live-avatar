@@ -223,4 +223,14 @@ Assert-Throws {
 } 'insufficient disk is rejected before download'
 Assert-True (-not $downloadWasCalled) 'disk rejection performs no download'
 
+$overlayRoot = Join-Path $base 'Installer Overlays'
+$overlayEmbed = Join-Path $overlayRoot 'LiveTalking\web\embed.html'
+$installedEmbed = Join-Path $layout.version_root 'LiveTalking\web\embed.html'
+New-Item -ItemType Directory -Path (Split-Path -Parent $overlayEmbed),(Split-Path -Parent $installedEmbed) -Force | Out-Null
+[IO.File]::WriteAllText($overlayEmbed, 'clear portrait layout', (New-Object Text.UTF8Encoding($false)))
+[IO.File]::WriteAllText($installedEmbed, 'stretched portrait layout', (New-Object Text.UTF8Encoding($false)))
+$overlayResult = Install-LiveAvatarOverlays -Layout $layout -OverlayRoot $overlayRoot
+Assert-Equal 1 $overlayResult.Count 'one packaged runtime overlay is applied'
+Assert-Equal 'clear portrait layout' (Get-Content -LiteralPath $installedEmbed -Raw -Encoding UTF8) 'runtime overlay replaces the installed embed page'
+
 Complete-TestRun

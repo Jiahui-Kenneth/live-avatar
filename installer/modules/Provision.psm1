@@ -86,6 +86,24 @@ function Write-ProvisionJson {
     return $Path
 }
 
+function Install-LiveAvatarOverlays {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Layout,
+        [Parameter(Mandatory = $true)][string]$OverlayRoot
+    )
+    $applied = New-Object Collections.Generic.List[string]
+    $relativePaths = @('LiveTalking\web\embed.html')
+    foreach ($relativePath in $relativePaths) {
+        $source = Join-Path $OverlayRoot $relativePath
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { continue }
+        $destination = Assert-PathBelowRoot $Layout.version_root (Join-Path $Layout.version_root $relativePath) 'overlay destination'
+        Copy-FileAtomically $source $destination | Out-Null
+        $applied.Add($destination)
+    }
+    return $applied.ToArray()
+}
+
 function Get-ComponentTarget {
     param($Component, $Layout)
     switch ([string]$Component.id) {
@@ -451,6 +469,7 @@ function Invoke-LiveAvatarProvisioning {
         [Parameter(Mandatory = $true)]$Ports,
         [ValidateSet('Official','China')][string]$Mirror = 'Official',
         [string]$WheelLockPath,
+        [string]$OverlayRoot,
         [scriptblock]$DownloadAction,
         [scriptblock]$ComponentAction,
         [scriptblock]$SmokeTestAction,
@@ -503,6 +522,10 @@ function Invoke-LiveAvatarProvisioning {
     else { Install-LiveAvatarComponent -Component $modelArtifact -Layout $Layout -DownloadRoot $downloadRoot | Out-Null }
     Add-State 'configure'
     Write-LiveAvatarConfig -Layout $Layout -Hardware $Hardware -ModelSelection $ModelSelection -Ports $Ports | Out-Null
+    if (-not [string]::IsNullOrWhiteSpace($OverlayRoot)) {
+        Add-State 'apply-overlays'
+        Install-LiveAvatarOverlays -Layout $Layout -OverlayRoot $OverlayRoot | Out-Null
+    }
     Add-State 'smoke-test'
     if ($null -ne $SmokeTestAction) {
         $smoke = & $SmokeTestAction $Layout
@@ -513,4 +536,4 @@ function Invoke-LiveAvatarProvisioning {
     return [pscustomobject]@{states=$states.ToArray();layout=$Layout;model=$ModelSelection.model;mode=$ModelSelection.mode;required_bytes=$requiredBytes}
 }
 
-Export-ModuleMember -Function Install-LiveAvatarComponent, Get-LiveAvatarInstallOrder, Invoke-LiveAvatarProvisioning
+Export-ModuleMember -Function Install-LiveAvatarComponent, Install-LiveAvatarOverlays, Get-LiveAvatarInstallOrder, Invoke-LiveAvatarProvisioning

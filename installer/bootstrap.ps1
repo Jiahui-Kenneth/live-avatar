@@ -11,6 +11,7 @@ param(
     [string]$HardwareProfilePath,
     [string]$NvidiaSmiPath = (Join-Path $env:WINDIR 'System32\nvidia-smi.exe'),
     [string]$FixtureSourceRoot,
+    [string]$OverlayRoot,
     [switch]$WhatIf
 )
 
@@ -18,6 +19,7 @@ $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($ManifestPath)) { $ManifestPath = Join-Path $PSScriptRoot 'manifests\components-v0.1.0.json' }
 if ([string]::IsNullOrWhiteSpace($ModelManifestPath)) { $ModelManifestPath = Join-Path $PSScriptRoot 'manifests\models.json' }
 if ([string]::IsNullOrWhiteSpace($WheelLockPath)) { $WheelLockPath = Join-Path $PSScriptRoot 'manifests\python-requirements.lock.json' }
+if ([string]::IsNullOrWhiteSpace($OverlayRoot)) { $OverlayRoot = Join-Path $PSScriptRoot 'overlays' }
 Import-Module "$PSScriptRoot\modules\Manifest.psm1" -ErrorAction Stop
 Import-Module "$PSScriptRoot\modules\Hardware.psm1" -ErrorAction Stop
 Import-Module "$PSScriptRoot\modules\ModelSelection.psm1" -ErrorAction Stop
@@ -101,7 +103,7 @@ $smokeTest = {
 
 $invokeParameters = @{
     Layout=$layout;Hardware=$hardware;ModelSelection=$selection;Components=@($components.components);Ports=$ports
-    Mirror=$Mirror;WheelLockPath=$WheelLockPath;DownloadAction=$downloadAction;SmokeTestAction=$smokeTest
+    Mirror=$Mirror;WheelLockPath=$WheelLockPath;OverlayRoot=$OverlayRoot;DownloadAction=$downloadAction;SmokeTestAction=$smokeTest
 }
 $result = Invoke-LiveAvatarProvisioning @invokeParameters
 [pscustomobject]@{

@@ -1,13 +1,13 @@
 . "$PSScriptRoot\TestHarness.ps1"
 
 $issPath = Join-Path $PSScriptRoot '..\LiveAvatar.iss'
-$setupPath = Join-Path $PSScriptRoot '..\dist\LiveAvatar-Setup-0.1.3.exe'
+$setupPath = Join-Path $PSScriptRoot '..\dist\LiveAvatar-Setup-0.1.4.exe'
 Assert-True (Test-Path -LiteralPath $issPath -PathType Leaf) 'Inno Setup source exists'
 Assert-True (Test-Path -LiteralPath $setupPath -PathType Leaf) 'compiled setup exists'
 if (Test-Path -LiteralPath $setupPath -PathType Leaf) {
     $setup = Get-Item -LiteralPath $setupPath
     Assert-True ($setup.Length -lt 50MB) 'setup stays below 50 MiB'
-    Assert-True ([string]$setup.VersionInfo.ProductVersion -match '^0\.1\.3') 'setup embeds version 0.1.3'
+    Assert-True ([string]$setup.VersionInfo.ProductVersion -match '^0\.1\.4') 'setup embeds version 0.1.4'
 }
 
 if (Test-Path -LiteralPath $issPath -PathType Leaf) {
@@ -22,6 +22,7 @@ if (Test-Path -LiteralPath $issPath -PathType Leaf) {
     Assert-True ($iss -match 'DeleteSettings\.Checked := False') 'settings deletion is opt-in'
     Assert-True ($iss -match 'function InitializeUninstall\(\): Boolean') 'uninstall choices are shown before removal starts'
     Assert-True ($iss -match 'skipifsilent') 'silent fixture install skips online bootstrap'
+    Assert-True ($iss -match 'installer\\overlays\\LiveTalking\\web') 'setup packages the avatar display overlay'
 }
 
 if (Test-Path -LiteralPath $setupPath -PathType Leaf) {
@@ -41,6 +42,11 @@ if (Test-Path -LiteralPath $setupPath -PathType Leaf) {
         Assert-Equal 0 $setupProcess.ExitCode 'silent per-user fixture install succeeds'
         Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'installer/bootstrap.ps1') -PathType Leaf) 'fixture install contains bootstrap'
         Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'launcher/LiveAvatar.ps1') -PathType Leaf) 'fixture install contains launcher'
+        $installedOverlay = Join-Path $installRoot 'installer/overlays/LiveTalking/web/embed.html'
+        Assert-True (Test-Path -LiteralPath $installedOverlay -PathType Leaf) 'fixture install contains avatar display overlay'
+        if (Test-Path -LiteralPath $installedOverlay -PathType Leaf) {
+            Assert-True ((Get-Content -LiteralPath $installedOverlay -Raw -Encoding UTF8) -match 'object-fit:\s*contain') 'packaged overlay preserves portrait sharpness'
+        }
         $shortcuts = @(Get-ChildItem -LiteralPath $shortcutRoot -Filter '*.lnk' -File -ErrorAction SilentlyContinue)
         Assert-Equal 3 $shortcuts.Count 'fixture install creates three shortcuts'
         $shell = New-Object -ComObject WScript.Shell
