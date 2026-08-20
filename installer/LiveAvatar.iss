@@ -58,10 +58,85 @@ var
   DeleteSettingsSelected: Boolean;
   UninstallDataRoot: string;
 
+function ReadFirstTextLine(FileName: string): string;
+var
+  Lines: TArrayOfString;
+begin
+  Result := '';
+  if LoadStringsFromFile(FileName, Lines) and (GetArrayLength(Lines) > 0) then
+    Result := Trim(Lines[0]);
+end;
+
+procedure WriteUtf8TextLine(FileName: string; Value: string);
+var
+  Lines: TArrayOfString;
+begin
+  SetArrayLength(Lines, 1);
+  Lines[0] := Value;
+  if not SaveStringsToUTF8FileWithoutBOM(FileName, Lines, False) then
+    RaiseException('Unable to save the Live Avatar data directory.');
+end;
+
+function GetJsonStringProperty(FileName: string; PropertyName: string): string;
+var
+  Lines: TArrayOfString;
+  I, PropertyPos, ColonPos, QuotePos: Integer;
+  Needle, Tail: string;
+begin
+  Result := '';
+  if not LoadStringsFromFile(FileName, Lines) then
+    Exit;
+  Needle := '"' + PropertyName + '"';
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    PropertyPos := Pos(Needle, Lines[I]);
+    if PropertyPos > 0 then
+    begin
+      Tail := Copy(Lines[I], PropertyPos + Length(Needle), Length(Lines[I]));
+      ColonPos := Pos(':', Tail);
+      if ColonPos > 0 then
+      begin
+        Tail := Trim(Copy(Tail, ColonPos + 1, Length(Tail)));
+        if Copy(Tail, 1, 1) = '"' then
+        begin
+          Delete(Tail, 1, 1);
+          QuotePos := Pos('"', Tail);
+          if QuotePos > 0 then
+          begin
+            Result := Copy(Tail, 1, QuotePos - 1);
+            StringChangeEx(Result, '\\', '\', True);
+            StringChangeEx(Result, '\/', '/', True);
+            Exit;
+          end;
+        end;
+      end;
+    end;
+  end;
+end;
+
+function GetActiveConfigDataRoot(InstallDir: string): string;
+var
+  VersionValue, DataRootValue, ConfigPath: string;
+begin
+  Result := '';
+  VersionValue := GetJsonStringProperty(AddBackslash(InstallDir) + 'current.json', 'version');
+  if (VersionValue = '') or (Pos('..', VersionValue) > 0) or
+     (Pos('\', VersionValue) > 0) or (Pos('/', VersionValue) > 0) then
+    Exit;
+  ConfigPath := AddBackslash(InstallDir) + 'app\versions\' + VersionValue + '\app.json';
+  DataRootValue := GetJsonStringProperty(ConfigPath, 'data_root');
+  if DataRootValue = '' then
+    Exit;
+  StringChangeEx(DataRootValue, '/', '\', True);
+  if (ExtractFileDrive(DataRootValue) <> '') or (Copy(DataRootValue, 1, 2) = '\\') then
+    Result := DataRootValue
+  else
+    Result := ExpandFileName(AddBackslash(InstallDir) + DataRootValue);
+end;
+
 procedure InitializeWizard;
 var
   SelectedDataRoot: string;
-  SavedDataRoot: AnsiString;
 begin
   DataDirPage := CreateInputDirPage(wpSelectDir,
     'Models and user data',
@@ -69,12 +144,12 @@ begin
     'Keeping this separate lets upgrades preserve your personal data.', False, '');
   DataDirPage.Add('Data directory:');
   SelectedDataRoot := Trim(ExpandConstant('{param:DataRoot|}'));
-  if (SelectedDataRoot = '') and
-     FileExists(AddBackslash(WizardDirValue) + 'installer-data-root.txt') and
-     LoadStringFromFile(AddBackslash(WizardDirValue) + 'installer-data-root.txt', SavedDataRoot) then
-    SelectedDataRoot := Trim(String(SavedDataRoot));
   if SelectedDataRoot = '' then
     SelectedDataRoot := Trim(GetPreviousData('DataRoot', ''));
+  if SelectedDataRoot = '' then
+    SelectedDataRoot := GetActiveConfigDataRoot(WizardDirValue);
+  if SelectedDataRoot = '' then
+    SelectedDataRoot := ReadFirstTextLine(AddBackslash(WizardDirValue) + 'installer-data-root.txt');
   if SelectedDataRoot = '' then
     SelectedDataRoot := ExpandConstant('{localappdata}\LiveAvatar\data');
   DataDirPage.Values[0] := SelectedDataRoot;
@@ -101,8 +176,7 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
-    SaveStringToFile(ExpandConstant('{app}\installer-data-root.txt'),
-      GetDataRoot(''), False);
+    WriteUtf8TextLine(ExpandConstant('{app}\installer-data-root.txt'), GetDataRoot(''));
 end;
 
 function IsSafeDataRoot(Path: string): Boolean;
@@ -117,16 +191,15 @@ end;
 function InitializeUninstall(): Boolean;
 var
   RootFile: string;
-  RootValue: AnsiString;
   ChoiceForm: TSetupForm;
   DescriptionLabel: TNewStaticText;
   OkButton: TNewButton;
   CancelButton: TNewButton;
 begin
   RootFile := ExpandConstant('{app}\installer-data-root.txt');
-  UninstallDataRoot := '';
-  if FileExists(RootFile) and LoadStringFromFile(RootFile, RootValue) then
-    UninstallDataRoot := String(RootValue);
+  UninstallDataRoot := ReadFirstTextLine(RootFile);
+  if UninstallDataRoot = '' then
+    UninstallDataRoot := GetActiveConfigDataRoot(ExpandConstant('{app}'));
 
   ChoiceForm := CreateCustomForm(ScaleX(460), ScaleY(240), False, True);
   ChoiceForm.Caption := 'Uninstall Live Avatar';

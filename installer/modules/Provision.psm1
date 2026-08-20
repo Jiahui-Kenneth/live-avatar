@@ -55,20 +55,60 @@ function Assert-RequiredFiles {
 }
 
 function Copy-FileAtomically {
-    param([string]$Source, [string]$Destination)
+    param([string]$Source, [string]$Destination, [scriptblock]$CopyAction)
     $parent = Split-Path -Parent $Destination
     if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
     $temporary = "$Destination.new-$([guid]::NewGuid().ToString('N'))"
-    Copy-Item -LiteralPath $Source -Destination $temporary
-    if (Test-Path -LiteralPath $Destination -PathType Leaf) {
-        $backup = "$Destination.old-$([guid]::NewGuid().ToString('N'))"
-        [IO.File]::Replace($temporary, $Destination, $backup, $true)
-        if (Test-Path -LiteralPath $backup -PathType Leaf) { Remove-Item -LiteralPath $backup -Force }
+    $backup = $null
+    $committed = $false
+    $destinationExisted = Test-Path -LiteralPath $Destination -PathType Leaf
+    $expectedHash = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash
+    try {
+        if ($null -ne $CopyAction) { & $CopyAction $Source $temporary }
+        else { Copy-Item -LiteralPath $Source -Destination $temporary }
+        $temporaryHash = (Get-FileHash -LiteralPath $temporary -Algorithm SHA256).Hash
+        if (-not $expectedHash.Equals($temporaryHash, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "atomic copy verification failed before commit: $Destination"
+        }
+        if ($destinationExisted) {
+            $backup = "$Destination.old-$([guid]::NewGuid().ToString('N'))"
+            [IO.File]::Replace($temporary, $Destination, $backup, $true)
+        }
+        else { Move-Item -LiteralPath $temporary -Destination $Destination }
+        $committed = $true
+        $destinationHash = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
+        if (-not $expectedHash.Equals($destinationHash, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "atomic copy verification failed after commit: $Destination"
+        }
+        if ($null -ne $backup -and (Test-Path -LiteralPath $backup -PathType Leaf)) {
+            Remove-Item -LiteralPath $backup -Force
+        }
+        return $Destination
     }
-    else { Move-Item -LiteralPath $temporary -Destination $Destination }
-    return $Destination
+    catch {
+        $failure = $_.Exception
+        if ($committed) {
+            try {
+                if ($destinationExisted -and $null -ne $backup -and (Test-Path -LiteralPath $backup -PathType Leaf)) {
+                    $failedCopy = "$Destination.failed-$([guid]::NewGuid().ToString('N'))"
+                    [IO.File]::Replace($backup, $Destination, $failedCopy, $true)
+                    if (Test-Path -LiteralPath $failedCopy -PathType Leaf) { Remove-Item -LiteralPath $failedCopy -Force }
+                }
+                elseif (-not $destinationExisted -and (Test-Path -LiteralPath $Destination -PathType Leaf)) {
+                    Remove-Item -LiteralPath $Destination -Force
+                }
+            }
+            catch {
+                throw "atomic copy failed and rollback failed; backup retained at '$backup': $($failure.Message)"
+            }
+        }
+        throw $failure
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporary -PathType Leaf) { Remove-Item -LiteralPath $temporary -Force }
+    }
 }
 
 function Write-ProvisionJson {
@@ -103,11 +143,6 @@ function Install-LiveAvatarOverlays {
         }
         $destination = Assert-PathBelowRoot $Layout.version_root (Join-Path $Layout.version_root $relativePath) 'overlay destination'
         Copy-FileAtomically $source $destination | Out-Null
-        $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
-        $destinationHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
-        if (-not $sourceHash.Equals($destinationHash, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "runtime overlay verification failed: $destination"
-        }
         $applied.Add($destination)
     }
     return $applied.ToArray()

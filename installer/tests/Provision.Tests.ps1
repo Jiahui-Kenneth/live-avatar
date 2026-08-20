@@ -233,6 +233,25 @@ $overlayResult = Install-LiveAvatarOverlays -Layout $layout -OverlayRoot $overla
 Assert-Equal 1 $overlayResult.Count 'one packaged runtime overlay is applied'
 Assert-Equal 'clear portrait layout' (Get-Content -LiteralPath $installedEmbed -Raw -Encoding UTF8) 'runtime overlay replaces the installed embed page'
 
+$rollbackSource = Join-Path $base 'rollback-source.html'
+$rollbackDestination = Join-Path $base 'rollback-destination.html'
+[IO.File]::WriteAllText($rollbackSource, 'new verified page', (New-Object Text.UTF8Encoding($false)))
+[IO.File]::WriteAllText($rollbackDestination, 'existing working page', (New-Object Text.UTF8Encoding($false)))
+$copyFailure = ''
+try {
+    $provisionModule = Get-Module Provision
+    & $provisionModule {
+        param($source,$destination)
+        Copy-FileAtomically -Source $source -Destination $destination -CopyAction {
+            param($copySource,$temporary)
+            [IO.File]::WriteAllText($temporary, 'corrupt copied page', (New-Object Text.UTF8Encoding($false)))
+        }
+    } $rollbackSource $rollbackDestination
+}
+catch { $copyFailure = $_.Exception.Message }
+Assert-True ($copyFailure -match 'verification failed') 'corrupt overlay copy is rejected by content verification'
+Assert-Equal 'existing working page' (Get-Content -LiteralPath $rollbackDestination -Raw -Encoding UTF8) 'corrupt overlay copy keeps the active page intact'
+
 $missingOverlayRoot = Join-Path $base 'Missing Installer Overlays'
 Assert-Throws {
     Install-LiveAvatarOverlays -Layout $layout -OverlayRoot $missingOverlayRoot -Required

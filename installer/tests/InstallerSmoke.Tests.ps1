@@ -25,13 +25,17 @@ if (Test-Path -LiteralPath $issPath -PathType Leaf) {
     Assert-True ($iss -match 'installer\\overlays\\LiveTalking\\web') 'setup packages the avatar display overlay'
     Assert-True ($iss -match 'procedure RegisterPreviousData\(PreviousDataKey: Integer\)') 'setup preserves the selected data root across upgrades'
     Assert-True ($iss -match 'GetPreviousData\(') 'setup reloads the previous data root during upgrades'
+    Assert-True ($iss -match 'LoadStringsFromFile\(') 'setup reads data-root markers as Unicode text'
+    Assert-True ($iss -match 'SaveStringsToUTF8File') 'setup writes data-root markers as UTF-8 text'
+    Assert-True ($iss -match 'GetActiveConfigDataRoot') 'setup can recover the authoritative data root from the active app config'
+    Assert-True ($iss -notmatch 'SaveStringToFile\(') 'setup no longer writes data-root markers through the ANSI API'
     Assert-True ($iss -match 'OverlayOnly') 'setup selects lightweight overlay updates for existing installs'
 }
 
 if (Test-Path -LiteralPath $setupPath -PathType Leaf) {
     $fixtureRoot = Join-Path $env:TEMP ("Live Avatar Setup Smoke " + [guid]::NewGuid().ToString('N'))
     $installRoot = Join-Path $fixtureRoot 'Program Files'
-    $dataRoot = Join-Path $fixtureRoot 'User Data'
+    $dataRoot = Join-Path $fixtureRoot '用户数据'
     $shortcutRoot = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Live Avatar'
     $shortcutBackup = Join-Path $fixtureRoot 'shortcut-backup'
     $hadShortcutRoot = Test-Path -LiteralPath $shortcutRoot -PathType Container
@@ -70,7 +74,7 @@ if (Test-Path -LiteralPath $setupPath -PathType Leaf) {
             Write-Host (Get-Content -LiteralPath $upgradeLog -Raw -Encoding UTF8)
         }
         Assert-Equal 0 $upgradeProcess.ExitCode 'silent fixture upgrade succeeds without repeating the data-root option'
-        Assert-Equal ([IO.Path]::GetFullPath($dataRoot).TrimEnd('\')) ((Get-Content -LiteralPath (Join-Path $installRoot 'installer-data-root.txt') -Raw).Trim().TrimEnd('\')) 'fixture upgrade preserves the existing custom data root'
+        Assert-Equal ([IO.Path]::GetFullPath($dataRoot).TrimEnd('\')) ((Get-Content -LiteralPath (Join-Path $installRoot 'installer-data-root.txt') -Raw -Encoding UTF8).Trim().TrimEnd('\')) 'fixture upgrade preserves the existing custom data root'
         $uninstaller = Join-Path $installRoot 'unins000.exe'
         $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -WindowStyle Hidden -Wait -PassThru
         Assert-Equal 0 $uninstallProcess.ExitCode 'silent fixture uninstall succeeds'
